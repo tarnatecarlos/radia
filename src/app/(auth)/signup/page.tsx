@@ -1,0 +1,129 @@
+"use client";
+
+import { useState } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { ArrowRight, Loader2 } from "lucide-react";
+import { useToast } from "@/components/ui/toast";
+import { createClient } from "@/lib/supabase/client";
+
+export default function SignupPage() {
+  const router = useRouter();
+  const { toast } = useToast();
+  const [firstName, setFirstName] = useState("");
+  const [lastName, setLastName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  async function handleSignup(e: React.FormEvent) {
+    e.preventDefault();
+    if (!firstName.trim() || !email.trim() || !password.trim()) {
+      toast("Please fill in all required fields", "error");
+      return;
+    }
+    if (password.length < 8) {
+      toast("Password must be at least 8 characters", "error");
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const supabase = createClient();
+      const { error } = await supabase.auth.signUp({
+        email: email.trim(),
+        password,
+        options: {
+          data: {
+            first_name: firstName.trim(),
+            last_name: lastName.trim(),
+          },
+        },
+      });
+
+      if (error) {
+        toast(error.message, "error");
+        return;
+      }
+
+      toast("Account created! Redirecting...");
+      router.push("/dashboard");
+    } catch {
+      toast("Something went wrong. Please try again.", "error");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="w-full max-w-sm">
+      <div className="radia-card p-8">
+        <h1 className="text-2xl font-bold text-slate-900 dark:text-slate-100">Create your account</h1>
+        <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Get started with Radia in seconds.</p>
+
+        <form onSubmit={handleSignup} className="mt-6 space-y-4">
+          <div className="grid grid-cols-2 gap-3">
+            <label className="block">
+              <span className="mb-1 block text-sm font-medium text-slate-600 dark:text-slate-300">First name *</span>
+              <input
+                value={firstName}
+                onChange={(e) => setFirstName(e.target.value)}
+                className="radia-input w-full px-3 py-2.5 text-sm text-slate-900 dark:text-slate-100"
+                required
+              />
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-sm font-medium text-slate-600 dark:text-slate-300">Last name</span>
+              <input
+                value={lastName}
+                onChange={(e) => setLastName(e.target.value)}
+                className="radia-input w-full px-3 py-2.5 text-sm text-slate-900 dark:text-slate-100"
+              />
+            </label>
+          </div>
+
+          <label className="block">
+            <span className="mb-1 block text-sm font-medium text-slate-600 dark:text-slate-300">Email *</span>
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="you@company.com"
+              className="radia-input w-full px-3 py-2.5 text-sm text-slate-900 dark:text-slate-100"
+              required
+            />
+          </label>
+
+          <label className="block">
+            <span className="mb-1 block text-sm font-medium text-slate-600 dark:text-slate-300">Password *</span>
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="At least 8 characters"
+              className="radia-input w-full px-3 py-2.5 text-sm text-slate-900 dark:text-slate-100"
+              required
+              minLength={8}
+            />
+          </label>
+
+          <button
+            type="submit"
+            disabled={loading}
+            className="flex w-full items-center justify-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-indigo-700 disabled:opacity-50"
+          >
+            {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />}
+            {loading ? "Creating account..." : "Create account"}
+          </button>
+        </form>
+      </div>
+
+      <p className="mt-4 text-center text-sm text-slate-500 dark:text-slate-400">
+        Already have an account?{" "}
+        <Link href="/login" className="font-medium text-indigo-600 hover:text-indigo-700 dark:text-indigo-400">
+          Log in
+        </Link>
+      </p>
+    </div>
+  );
+}

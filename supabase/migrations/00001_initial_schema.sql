@@ -217,6 +217,45 @@ create trigger set_sops_updated_at
   for each row execute function public.handle_updated_at();
 
 -- ============================================================
+-- AUTO-CREATE PROFILE + WORKSPACE ON SIGNUP
+-- ============================================================
+create or replace function public.handle_new_user()
+returns trigger as $$
+declare
+  new_workspace_id uuid;
+  user_first text;
+  user_last text;
+  user_email text;
+begin
+  user_email := new.email;
+  user_first := coalesce(new.raw_user_meta_data->>'first_name', split_part(user_email, '@', 1));
+  user_last  := coalesce(new.raw_user_meta_data->>'last_name', '');
+
+  -- Create a personal workspace
+  insert into public.workspaces (name, subdomain)
+  values (
+    user_first || '''s Workspace',
+    lower(replace(user_first || '-' || substr(new.id::text, 1, 8), ' ', '-'))
+  )
+  returning id into new_workspace_id;
+
+  -- Create the profile linked to the auth user
+  insert into public.profiles (auth_user_id, workspace_id, email, first_name, last_name, role)
+  values (new.id, new_workspace_id, user_email, user_first, user_last, 'creator');
+
+  -- Create default notification preferences
+  insert into public.notification_preferences (profile_id)
+  values ((select id from public.profiles where auth_user_id = new.id));
+
+  return new;
+end;
+$$ language plpgsql security definer;
+
+create trigger on_auth_user_created
+  after insert on auth.users
+  for each row execute function public.handle_new_user();
+
+-- ============================================================
 -- ROW LEVEL SECURITY
 -- ============================================================
 alter table public.workspaces               enable row level security;

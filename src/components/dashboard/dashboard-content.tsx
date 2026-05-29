@@ -186,7 +186,7 @@ export function DashboardContent() {
     if (!sopTitle.trim()) { toast("SOP title is required", "error"); return; }
     toast("SOP created successfully");
     setModal(null); resetForms();
-    router.push("/sops");
+    router.push("/dashboard/sops");
   }
 
   return (
