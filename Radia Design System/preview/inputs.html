@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<link rel="stylesheet" href="../colors_and_type.css">
+<style>
+  body { margin:0; padding:24px 28px; background:var(--surface); font-family:var(--font-sans); display:flex; flex-direction:column; gap:16px; max-width:380px; }
+  label { font-size:12px; font-weight:500; color:var(--fg-2); display:block; margin-bottom:6px; }
+  .field { width:100%; box-sizing:border-box; font-family:var(--font-sans); font-size:14px; color:var(--fg-1); background:var(--surface); border:1px solid var(--border-strong); border-radius:var(--radius-lg); padding:9px 12px; }
+  .field::placeholder { color:var(--fg-3); }
+  .field.focus { border-color:var(--accent); box-shadow:var(--shadow-focus); outline:none; }
+  .hint { font-size:11px; color:var(--fg-3); margin-top:5px; }
+</style></head>
+<body>
+  <div>
+    <label>Task title</label>
+    <input class="field" value="Set up CI/CD pipeline">
+  </div>
+  <div>
+    <label>Assignee</label>
+    <input class="field focus" placeholder="Search people…">
+    <div class="hint">focused — 3px indigo ring</div>
+  </div>
+  <div>
+    <label>Due date</label>
+    <input class="field" placeholder="Select a date" style="color:var(--fg-3)">
+  </div>
+</body></html>

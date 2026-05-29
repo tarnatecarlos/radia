@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<link rel="stylesheet" href="../colors_and_type.css">
+<style>
+  body { margin:0; padding:24px 28px; background:var(--surface); font-family:var(--font-sans); }
+  .name { font-size:11px; font-weight:600; letter-spacing:.04em; text-transform:uppercase; color:var(--fg-3); margin-bottom:16px; }
+  .row { display:flex; align-items:flex-end; gap:14px; }
+  .item { text-align:center; }
+  .bar { background:var(--accent); border-radius:2px; width:30px; }
+  .lbl { font-size:10px; font-family:var(--font-mono); color:var(--fg-3); margin-top:8px; }
+</style></head>
+<body>
+  <div class="name">Spacing · 4px grid</div>
+  <div class="row">
+    <div class="item"><div class="bar" style="height:4px"></div><div class="lbl">1·4</div></div>
+    <div class="item"><div class="bar" style="height:8px"></div><div class="lbl">2·8</div></div>
+    <div class="item"><div class="bar" style="height:12px"></div><div class="lbl">3·12</div></div>
+    <div class="item"><div class="bar" style="height:16px"></div><div class="lbl">4·16</div></div>
+    <div class="item"><div class="bar" style="height:24px"></div><div class="lbl">6·24</div></div>
+    <div class="item"><div class="bar" style="height:32px"></div><div class="lbl">8·32</div></div>
+    <div class="item"><div class="bar" style="height:48px"></div><div class="lbl">12·48</div></div>
+    <div class="item"><div class="bar" style="height:64px"></div><div class="lbl">16·64</div></div>
+  </div>
+</body></html>

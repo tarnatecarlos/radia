@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<link rel="stylesheet" href="../colors_and_type.css">
+<style>
+  body { margin:0; padding:24px 28px; background:var(--surface); font-family:var(--font-sans); display:flex; flex-direction:column; gap:16px; }
+  .row { display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+  button { font-family:var(--font-sans); font-size:14px; font-weight:500; border-radius:var(--radius-lg); padding:9px 16px; display:inline-flex; align-items:center; gap:7px; cursor:pointer; border:1px solid transparent; transition:.15s; }
+  .primary { background:var(--accent); color:#fff; box-shadow:var(--shadow-xs); }
+  .primary:hover { background:var(--accent-hover); }
+  .secondary { background:var(--surface); color:var(--fg-1); border-color:var(--border-strong); }
+  .secondary:hover { background:var(--surface-2); }
+  .ghost { background:transparent; color:var(--fg-2); }
+  .ghost:hover { background:var(--surface-2); }
+  .danger { background:var(--danger-soft); color:var(--danger); }
+  .disabled { background:var(--surface-sunken); color:var(--fg-3); border-color:var(--border); cursor:not-allowed; }
+  .icon { padding:9px; }
+  .lbl { font-size:11px; font-family:var(--font-mono); color:var(--fg-3); width:80px; }
+  [data-lucide] { width:16px; height:16px; }
+</style></head>
+<body>
+  <div class="row"><span class="lbl">primary</span>
+    <button class="primary"><i data-lucide="plus"></i>Create Task</button>
+    <button class="primary">Approve</button>
+    <button class="disabled" disabled>Disabled</button>
+  </div>
+  <div class="row"><span class="lbl">secondary</span>
+    <button class="secondary"><i data-lucide="user-plus"></i>Add Employee</button>
+    <button class="secondary">Cancel</button>
+  </div>
+  <div class="row"><span class="lbl">ghost / icon</span>
+    <button class="ghost">Reset Positions</button>
+    <button class="ghost icon"><i data-lucide="zoom-in"></i></button>
+    <button class="ghost icon"><i data-lucide="maximize"></i></button>
+    <button class="danger">Reject</button>
+  </div>
+<script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+<script>lucide.createIcons();</script>
+</body></html>

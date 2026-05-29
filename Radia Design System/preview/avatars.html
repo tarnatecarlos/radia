@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<link rel="stylesheet" href="../colors_and_type.css">
+<style>
+  body { margin:0; padding:24px 28px; background:var(--surface); font-family:var(--font-sans); display:flex; flex-direction:column; gap:18px; }
+  .name { font-size:11px; font-weight:600; letter-spacing:.04em; text-transform:uppercase; color:var(--fg-3); }
+  .row { display:flex; gap:12px; align-items:center; }
+  .av { border-radius:50%; color:#fff; font-weight:600; display:flex; align-items:center; justify-content:center; }
+  .stack { display:flex; }
+  .stack .av { border:2px solid var(--surface); margin-left:-8px; }
+  .stack .av:first-child { margin-left:0; }
+</style></head>
+<body>
+  <div class="name">Solid initial avatars — deterministic single hue</div>
+  <div class="row">
+    <span class="av" style="width:24px;height:24px;font-size:10px;background:var(--radia-indigo-600)">AR</span>
+    <span class="av" style="width:32px;height:32px;font-size:12px;background:var(--radia-emerald-600)">SC</span>
+    <span class="av" style="width:40px;height:40px;font-size:14px;background:var(--radia-amber-600)">MJ</span>
+    <span class="av" style="width:48px;height:48px;font-size:17px;background:var(--radia-rose-600)">EP</span>
+    <span class="av" style="width:48px;height:48px;font-size:17px;background:var(--radia-sky-600)">JW</span>
+  </div>
+  <div class="name">Stacked group</div>
+  <div class="stack">
+    <span class="av" style="width:32px;height:32px;font-size:12px;background:var(--radia-teal-600)">LN</span>
+    <span class="av" style="width:32px;height:32px;font-size:12px;background:var(--radia-violet-600)">DK</span>
+    <span class="av" style="width:32px;height:32px;font-size:12px;background:var(--radia-slate-500)">RG</span>
+    <span class="av" style="width:32px;height:32px;font-size:11px;background:var(--radia-slate-200);color:var(--fg-2)">+4</span>
+  </div>
+</body></html>

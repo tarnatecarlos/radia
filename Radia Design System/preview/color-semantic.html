@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<link rel="stylesheet" href="../colors_and_type.css">
+<style>
+  body { margin:0; padding:24px 28px; background:var(--surface); font-family:var(--font-sans); }
+  .grid { display:grid; grid-template-columns:repeat(4,1fr); gap:14px; }
+  .item { }
+  .chip { display:inline-flex; align-items:center; gap:6px; padding:4px 10px; border-radius:var(--radius-full); font-size:12px; font-weight:600; }
+  .dot { width:8px; height:8px; border-radius:50%; }
+  .pair { height:40px; border-radius:var(--radius-md); margin-bottom:8px; display:flex; }
+  .pair .soft { flex:1; } .pair .solid { width:40px; }
+  .lbl { font-size:11px; font-family:var(--font-mono); color:var(--fg-3); margin-top:6px; }
+</style></head>
+<body>
+  <div class="grid">
+    <div class="item">
+      <div class="pair"><div class="soft" style="background:var(--success-soft)"></div><div class="solid" style="background:var(--success)"></div></div>
+      <span class="chip" style="background:var(--success-soft);color:var(--success)"><span class="dot" style="background:var(--success)"></span>Done</span>
+      <div class="lbl">success · emerald</div>
+    </div>
+    <div class="item">
+      <div class="pair"><div class="soft" style="background:var(--warning-soft)"></div><div class="solid" style="background:var(--warning)"></div></div>
+      <span class="chip" style="background:var(--warning-soft);color:var(--warning)"><span class="dot" style="background:var(--warning)"></span>Review</span>
+      <div class="lbl">warning · amber</div>
+    </div>
+    <div class="item">
+      <div class="pair"><div class="soft" style="background:var(--danger-soft)"></div><div class="solid" style="background:var(--danger)"></div></div>
+      <span class="chip" style="background:var(--danger-soft);color:var(--danger)"><span class="dot" style="background:var(--danger)"></span>Rejected</span>
+      <div class="lbl">danger · rose</div>
+    </div>
+    <div class="item">
+      <div class="pair"><div class="soft" style="background:var(--info-soft)"></div><div class="solid" style="background:var(--info)"></div></div>
+      <span class="chip" style="background:var(--info-soft);color:var(--info)"><span class="dot" style="background:var(--info)"></span>In Progress</span>
+      <div class="lbl">info · sky</div>
+    </div>
+  </div>
+</body></html>

@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<link rel="stylesheet" href="../colors_and_type.css">
+<style>
+  body { margin:0; padding:20px 24px; background:var(--surface); font-family:var(--font-sans); }
+  .nav { width:220px; display:flex; flex-direction:column; gap:3px; }
+  .item { display:flex; align-items:center; gap:12px; padding:9px 12px; border-radius:var(--radius-lg); font-size:14px; font-weight:500; color:var(--fg-2); position:relative; cursor:pointer; }
+  .item:hover { background:var(--surface-2); color:var(--fg-1); }
+  .item.active { background:var(--accent-soft); color:var(--accent-soft-fg); }
+  .item.active::before { content:''; position:absolute; left:0; top:50%; transform:translateY(-50%); width:3px; height:18px; border-radius:0 3px 3px 0; background:var(--accent); }
+  [data-lucide] { width:18px; height:18px; }
+</style></head>
+<body>
+  <div class="nav">
+    <div class="item active"><i data-lucide="layout-dashboard"></i>Dashboard</div>
+    <div class="item"><i data-lucide="check-square"></i>Tasks</div>
+    <div class="item"><i data-lucide="network"></i>Org Chart</div>
+    <div class="item"><i data-lucide="graduation-cap"></i>Onboarding</div>
+  </div>
+<script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+<script>lucide.createIcons();</script>
+</body></html>

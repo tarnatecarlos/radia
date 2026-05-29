@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<link rel="stylesheet" href="../colors_and_type.css">
+<style>
+  body { margin:0; padding:24px 28px; background:var(--bg-app); font-family:var(--font-sans); }
+  .grid { display:grid; grid-template-columns:repeat(3,1fr); gap:14px; }
+  .stat { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-lg); padding:18px; box-shadow:var(--shadow-sm); }
+  .top { display:flex; align-items:flex-start; justify-content:space-between; }
+  .lbl { font-size:13px; color:var(--fg-2); font-weight:500; }
+  .val { font-size:28px; font-weight:700; color:var(--fg-1); letter-spacing:-.02em; margin-top:8px; font-family:var(--font-mono); }
+  .ic { width:34px; height:34px; border-radius:var(--radius-md); display:flex; align-items:center; justify-content:center; background:var(--accent-soft); color:var(--accent); }
+  [data-lucide] { width:18px; height:18px; }
+  .delta { font-size:12px; font-weight:600; color:var(--success); margin-top:6px; }
+</style></head>
+<body>
+  <div class="grid">
+    <div class="stat"><div class="top"><span class="lbl">Total Employees</span><span class="ic"><i data-lucide="users"></i></span></div><div class="val">10</div><div class="delta">+2 this month</div></div>
+    <div class="stat"><div class="top"><span class="lbl">Active Tasks</span><span class="ic" style="background:var(--info-soft);color:var(--info)"><i data-lucide="check-square"></i></span></div><div class="val">7</div><div class="delta" style="color:var(--fg-3)">3 due this week</div></div>
+    <div class="stat"><div class="top"><span class="lbl">Onboarding</span><span class="ic" style="background:var(--warning-soft);color:var(--warning)"><i data-lucide="graduation-cap"></i></span></div><div class="val">68%</div><div class="delta">2 in progress</div></div>
+  </div>
+<script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+<script>lucide.createIcons();</script>
+</body></html>

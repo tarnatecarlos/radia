@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<link rel="stylesheet" href="../colors_and_type.css">
+<style>
+  body { margin:0; padding:24px 28px; background:var(--surface); font-family:var(--font-sans); display:flex; flex-direction:column; gap:16px; }
+  .name { font-size:11px; font-weight:600; letter-spacing:.04em; text-transform:uppercase; color:var(--fg-3); }
+  .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .pill { display:inline-flex; align-items:center; gap:6px; padding:3px 10px; border-radius:var(--radius-full); font-size:12px; font-weight:600; }
+  .dot { width:7px; height:7px; border-radius:50%; }
+</style></head>
+<body>
+  <div class="name">Task status</div>
+  <div class="row">
+    <span class="pill" style="background:var(--surface-2);color:var(--fg-2)"><span class="dot" style="background:var(--radia-slate-400)"></span>To Do</span>
+    <span class="pill" style="background:var(--info-soft);color:var(--info)"><span class="dot" style="background:var(--info)"></span>In Progress</span>
+    <span class="pill" style="background:var(--warning-soft);color:var(--warning)"><span class="dot" style="background:var(--warning)"></span>Review</span>
+    <span class="pill" style="background:var(--success-soft);color:var(--success)"><span class="dot" style="background:var(--success)"></span>Done</span>
+  </div>
+  <div class="name">Priority &amp; request status</div>
+  <div class="row">
+    <span class="pill" style="background:var(--danger-soft);color:var(--danger)"><span class="dot" style="background:var(--danger)"></span>High</span>
+    <span class="pill" style="background:var(--warning-soft);color:var(--warning)"><span class="dot" style="background:var(--warning)"></span>Medium</span>
+    <span class="pill" style="background:var(--success-soft);color:var(--success)"><span class="dot" style="background:var(--success)"></span>Low</span>
+    <span class="pill" style="background:var(--warning-soft);color:var(--warning)">Pending</span>
+    <span class="pill" style="background:var(--success-soft);color:var(--success)">Approved</span>
+  </div>
+</body></html>

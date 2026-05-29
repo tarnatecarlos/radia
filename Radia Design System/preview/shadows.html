@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<link rel="stylesheet" href="../colors_and_type.css">
+<style>
+  body { margin:0; padding:30px 28px; background:var(--bg-app); font-family:var(--font-sans); }
+  .row { display:flex; gap:26px; }
+  .item { text-align:center; }
+  .box { width:96px; height:64px; background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-lg); }
+  .lbl { font-size:11px; font-family:var(--font-mono); color:var(--fg-3); margin-top:12px; }
+</style></head>
+<body>
+  <div class="row">
+    <div class="item"><div class="box" style="box-shadow:var(--shadow-xs)"></div><div class="lbl">shadow-xs</div></div>
+    <div class="item"><div class="box" style="box-shadow:var(--shadow-sm)"></div><div class="lbl">shadow-sm · card</div></div>
+    <div class="item"><div class="box" style="box-shadow:var(--shadow-md)"></div><div class="lbl">shadow-md · hover</div></div>
+    <div class="item"><div class="box" style="box-shadow:var(--shadow-lg)"></div><div class="lbl">shadow-lg · overlay</div></div>
+    <div class="item"><div class="box" style="box-shadow:var(--shadow-focus)"></div><div class="lbl">focus ring</div></div>
+  </div>
+</body></html>

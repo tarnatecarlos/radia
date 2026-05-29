@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<link rel="stylesheet" href="../colors_and_type.css">
+<style>
+  body { margin:0; padding:22px 28px; background:var(--surface); font-family:var(--font-sans); display:flex; flex-direction:column; gap:16px; }
+  .grp { display:flex; flex-direction:column; gap:9px; }
+  .name { font-size:10px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; color:var(--fg-3); display:flex; align-items:center; gap:8px; }
+  .name .lock { font-size:9px; font-weight:600; letter-spacing:.04em; color:var(--fg-3); background:var(--surface-2); border:1px solid var(--border); padding:1px 6px; border-radius:var(--radius-full); text-transform:none; }
+  .row { display:flex; flex-wrap:wrap; gap:9px; align-items:center; }
+  /* system role badge */
+  .badge { display:inline-flex; align-items:center; gap:7px; padding:4px 11px 4px 4px; border-radius:var(--radius-full); font-size:12px; font-weight:600; background:var(--surface-2); border:1px solid var(--border); }
+  .av { width:24px; height:24px; border-radius:50%; color:#fff; font-size:10px; font-weight:600; display:flex; align-items:center; justify-content:center; }
+  /* custom badge (title / group) */
+  .chip { display:inline-flex; align-items:center; gap:6px; padding:4px 11px; border-radius:var(--radius-full); font-size:12px; font-weight:600; }
+  .dot { width:7px; height:7px; border-radius:50%; }
+  .new { display:inline-flex; align-items:center; gap:5px; padding:4px 11px; border-radius:var(--radius-full); font-size:12px; font-weight:600; color:var(--accent); background:transparent; border:1px dashed var(--border-strong); cursor:pointer; }
+</style></head>
+<body>
+  <div class="grp">
+    <div class="name">System roles <span class="lock">fixed · not editable</span></div>
+    <div class="row">
+      <span class="badge"><span class="av" style="background:var(--radia-role-creator)">AR</span>Creator</span>
+      <span class="badge"><span class="av" style="background:var(--radia-role-moderator)">SC</span>Moderator</span>
+      <span class="badge"><span class="av" style="background:var(--radia-role-user)">JW</span>User</span>
+      <span class="badge"><span class="av" style="background:var(--radia-role-superadmin)">AR</span>Super Admin</span>
+      <span class="badge"><span class="av" style="background:var(--radia-role-devops)">MJ</span>DevOps</span>
+      <span class="badge"><span class="av" style="background:var(--radia-role-auditor)">EP</span>Auditor</span>
+    </div>
+  </div>
+
+  <div class="grp">
+    <div class="name">Custom badges — Title</div>
+    <div class="row">
+      <span class="chip" style="background:var(--info-soft);color:var(--info)"><span class="dot" style="background:var(--info)"></span>Engineering Lead</span>
+      <span class="chip" style="background:var(--radia-violet-50);color:var(--radia-violet-600)"><span class="dot" style="background:var(--radia-violet-600)"></span>Design Lead</span>
+      <span class="chip" style="background:var(--success-soft);color:var(--success)"><span class="dot" style="background:var(--success)"></span>HR Director</span>
+      <span class="new">+ New title</span>
+    </div>
+  </div>
+
+  <div class="grp">
+    <div class="name">Custom badges — Group</div>
+    <div class="row">
+      <span class="chip" style="background:var(--warning-soft);color:var(--warning)"><span class="dot" style="background:var(--warning)"></span>Engineering</span>
+      <span class="chip" style="background:var(--radia-teal-50);color:var(--radia-teal-600)"><span class="dot" style="background:var(--radia-teal-600)"></span>Design</span>
+      <span class="chip" style="background:var(--danger-soft);color:var(--danger)"><span class="dot" style="background:var(--danger)"></span>Marketing</span>
+      <span class="chip" style="background:var(--accent-soft);color:var(--accent-soft-fg)"><span class="dot" style="background:var(--accent)"></span>People Ops</span>
+      <span class="new">+ New group</span>
+    </div>
+  </div>
+</body></html>
