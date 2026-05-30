@@ -1,9 +1,10 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Edit3, FileText, Plus, Save, Search, Tag, Trash2, X } from "lucide-react";
-import { getProfileById, sops as initialSops } from "@/lib/mock-data";
+import { useUser } from "@/lib/user-context";
+import { createClient } from "@/lib/supabase/client";
 import type { SOP } from "@/lib/types";
 import { useToast } from "@/components/ui/toast";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -24,10 +25,12 @@ function categoryTone(category: string) {
 
 export function SOPsContent() {
   const { toast } = useToast();
-  const [sopList, setSopList] = useState<SOP[]>(() => [...initialSops]);
+  const { profile } = useUser();
+  const [sopList, setSopList] = useState<SOP[]>([]);
+  const [profileNames, setProfileNames] = useState<Record<string, string>>({});
   const [search, setSearch] = useState("");
   const [activeCategory, setActiveCategory] = useState<(typeof categories)[number]>("All");
-  const [selectedId, setSelectedId] = useState<string | null>(initialSops[0]?.id ?? null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
 
   // Create modal
   const [showCreate, setShowCreate] = useState(false);
@@ -44,6 +47,43 @@ export function SOPsContent() {
   // Delete
   const [deleteId, setDeleteId] = useState<string | null>(null);
 
+  const fetchSOPs = useCallback(async () => {
+    if (!profile) return;
+    const supabase = createClient();
+    const { data } = await supabase
+      .from("sops")
+      .select("*")
+      .eq("workspace_id", profile.workspace_id)
+      .order("updated_at", { ascending: false });
+    if (data) {
+      setSopList(data as SOP[]);
+      if (!selectedId && data.length > 0) {
+        setSelectedId(data[0].id);
+      }
+    }
+  }, [profile, selectedId]);
+
+  const fetchProfiles = useCallback(async () => {
+    if (!profile) return;
+    const supabase = createClient();
+    const { data: profilesData } = await supabase
+      .from("profiles")
+      .select("id, first_name")
+      .eq("workspace_id", profile.workspace_id);
+    if (profilesData) {
+      const map: Record<string, string> = {};
+      for (const p of profilesData) {
+        map[p.id] = p.first_name;
+      }
+      setProfileNames(map);
+    }
+  }, [profile]);
+
+  useEffect(() => {
+    fetchSOPs();
+    fetchProfiles();
+  }, [fetchSOPs, fetchProfiles]);
+
   const filtered = useMemo(() => {
     return sopList.filter((sop) => {
       const matchesCategory = activeCategory === "All" || sop.category === activeCategory;
@@ -55,16 +95,23 @@ export function SOPsContent() {
 
   const selected = filtered.find((item) => item.id === selectedId) ?? filtered[0] ?? null;
 
-  function handleCreate() {
+  async function handleCreate() {
+    if (!profile) return;
     if (!newTitle.trim()) { toast("Title is required", "error"); return; }
-    const sop: SOP = {
-      id: `s${Date.now()}`, workspace_id: "w1", title: newTitle.trim(),
+    const supabase = createClient();
+    const { data, error } = await supabase.from("sops").insert({
+      workspace_id: profile.workspace_id,
+      title: newTitle.trim(),
       content: newContent.trim() || `# ${newTitle.trim()}\n\nContent goes here...`,
-      category: newCategory, version: 1, last_updated_by: "u1",
-      created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
-    };
-    setSopList((prev) => [sop, ...prev]);
-    setSelectedId(sop.id);
+      category: newCategory,
+      version: 1,
+      last_updated_by: profile.id,
+    }).select().single();
+    if (error) { toast("Failed to create SOP", "error"); return; }
+    if (data) {
+      setSopList((prev) => [data as SOP, ...prev]);
+      setSelectedId(data.id);
+    }
     toast("SOP created successfully");
     setShowCreate(false); setNewTitle(""); setNewContent(""); setNewCategory("General");
   }
@@ -76,19 +123,35 @@ export function SOPsContent() {
     setEditCategory(sop.category);
   }
 
-  function handleSaveEdit() {
+  async function handleSaveEdit() {
+    if (!profile) return;
     if (!editTitle.trim()) { toast("Title is required", "error"); return; }
+    const editedSop = sopList.find((s) => s.id === editingId);
+    if (!editedSop) return;
+    const supabase = createClient();
+    const { error } = await supabase.from("sops").update({
+      title: editTitle.trim(),
+      content: editContent,
+      category: editCategory,
+      version: editedSop.version + 1,
+      last_updated_by: profile.id,
+      updated_at: new Date().toISOString(),
+    }).eq("id", editingId!);
+    if (error) { toast("Failed to update SOP", "error"); return; }
     setSopList((prev) => prev.map((s) =>
       s.id === editingId
-        ? { ...s, title: editTitle.trim(), content: editContent, category: editCategory, version: s.version + 1, updated_at: new Date().toISOString(), last_updated_by: "u1" }
+        ? { ...s, title: editTitle.trim(), content: editContent, category: editCategory, version: s.version + 1, updated_at: new Date().toISOString(), last_updated_by: profile.id }
         : s
     ));
     toast("SOP updated successfully");
     setEditingId(null);
   }
 
-  function handleDelete() {
+  async function handleDelete() {
     if (!deleteId) return;
+    const supabase = createClient();
+    const { error } = await supabase.from("sops").delete().eq("id", deleteId);
+    if (error) { toast("Failed to delete SOP", "error"); return; }
     setSopList((prev) => prev.filter((s) => s.id !== deleteId));
     if (selectedId === deleteId) setSelectedId(null);
     toast("SOP deleted");
@@ -179,7 +242,7 @@ export function SOPsContent() {
                 <h2 className="mt-3 text-2xl font-bold tracking-tight text-slate-900 dark:text-slate-100">{selected.title}</h2>
                 <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">
                   Updated {new Date(selected.updated_at).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}
-                  {selected.last_updated_by ? ` by ${getProfileById(selected.last_updated_by)?.first_name ?? "Unknown"}` : ""}
+                  {selected.last_updated_by ? ` by ${profileNames[selected.last_updated_by] ?? "Unknown"}` : ""}
                 </p>
                 <div className="my-5 h-px bg-slate-200 dark:bg-slate-700" />
                 <RichContent content={selected.content} />

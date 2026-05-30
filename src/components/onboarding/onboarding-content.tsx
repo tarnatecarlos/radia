@@ -1,22 +1,48 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { ArrowLeft, BookOpen, CheckCircle2, Clock, GraduationCap, Play, X } from "lucide-react";
-import { courses, enrollments as initialEnrollments } from "@/lib/mock-data";
-import type { CourseEnrollment } from "@/lib/types";
+import type { Course, CourseEnrollment } from "@/lib/types";
 import { useToast } from "@/components/ui/toast";
 import { RichContent } from "@/components/ui/rich-content";
-
-const demoProfileId = "u6";
+import { useUser } from "@/lib/user-context";
+import { createClient } from "@/lib/supabase/client";
 
 export function OnboardingContent() {
   const { toast } = useToast();
-  const [enrollmentState, setEnrollmentState] = useState<CourseEnrollment[]>(() =>
-    initialEnrollments.filter((e) => e.profile_id === demoProfileId).map((e) => ({ ...e }))
-  );
+  const { profile, loading: userLoading } = useUser();
+  const [courses, setCourses] = useState<Course[]>([]);
+  const [enrollmentState, setEnrollmentState] = useState<CourseEnrollment[]>([]);
+  const [dataLoading, setDataLoading] = useState(true);
   const [activeCourseId, setActiveCourseId] = useState<string | null>(null);
   const [activeLessonIdx, setActiveLessonIdx] = useState(0);
+
+  useEffect(() => {
+    if (userLoading || !profile) return;
+
+    async function fetchData() {
+      const supabase = createClient();
+
+      const [coursesResult, enrollmentsResult] = await Promise.all([
+        supabase
+          .from("courses")
+          .select("*, lessons(*)")
+          .eq("workspace_id", profile!.workspace_id)
+          .order("created_at"),
+        supabase
+          .from("course_enrollments")
+          .select("*")
+          .eq("profile_id", profile!.id),
+      ]);
+
+      setCourses((coursesResult.data as Course[]) ?? []);
+      setEnrollmentState((enrollmentsResult.data as CourseEnrollment[]) ?? []);
+      setDataLoading(false);
+    }
+
+    fetchData();
+  }, [userLoading, profile]);
 
   function getProgress(courseId: string, lessonCount: number) {
     const enrollment = enrollmentState.find((e) => e.course_id === courseId);
@@ -56,23 +82,36 @@ export function OnboardingContent() {
     setActiveLessonIdx(0);
   }
 
-  function completeLesson(sortOrder: number) {
-    if (!activeCourse) return;
-    setEnrollmentState((prev) => {
-      const existing = prev.find((e) => e.course_id === activeCourse.id);
-      if (existing) {
-        if (existing.completed_lessons.includes(sortOrder)) return prev;
-        return prev.map((e) =>
+  async function completeLesson(sortOrder: number) {
+    if (!activeCourse || !profile) return;
+    const supabase = createClient();
+
+    const existing = enrollmentState.find((e) => e.course_id === activeCourse.id);
+    if (existing) {
+      if (existing.completed_lessons.includes(sortOrder)) return;
+      const updatedLessons = [...existing.completed_lessons, sortOrder];
+      await supabase
+        .from("course_enrollments")
+        .update({ completed_lessons: updatedLessons })
+        .eq("id", existing.id);
+      setEnrollmentState((prev) =>
+        prev.map((e) =>
           e.course_id === activeCourse.id
-            ? { ...e, completed_lessons: [...e.completed_lessons, sortOrder] }
+            ? { ...e, completed_lessons: updatedLessons }
             : e
-        );
+        )
+      );
+    } else {
+      const { data } = await supabase
+        .from("course_enrollments")
+        .insert({ profile_id: profile.id, course_id: activeCourse.id, completed_lessons: [sortOrder] })
+        .select()
+        .single();
+      if (data) {
+        setEnrollmentState((prev) => [...prev, data as CourseEnrollment]);
       }
-      return [...prev, {
-        id: `e${Date.now()}`, profile_id: demoProfileId,
-        course_id: activeCourse.id, completed_lessons: [sortOrder],
-      }];
-    });
+    }
+
     toast("Lesson completed!");
     const lessons = activeCourse.lessons ?? [];
     if (activeLessonIdx < lessons.length - 1) {
@@ -81,6 +120,14 @@ export function OnboardingContent() {
   }
 
   const isLessonComplete = (sortOrder: number) => activeEnrollment?.completed_lessons.includes(sortOrder) ?? false;
+
+  if (userLoading || dataLoading) {
+    return (
+      <div className="mx-auto max-w-4xl py-12 text-center text-sm text-slate-400">
+        Loading onboarding...
+      </div>
+    );
+  }
 
   return (
     <div className="mx-auto max-w-4xl space-y-6">

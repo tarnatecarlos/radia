@@ -15,13 +15,8 @@ import {
   Shield,
   Sun,
 } from "lucide-react";
-import {
-  currentUser,
-  getRoleBadgeColor,
-  getRoleLabel,
-  integrations,
-  serverAdmins,
-} from "@/lib/mock-data";
+import { useUser } from "@/lib/user-context";
+import { getRoleBadgeColor, getRoleLabel } from "@/lib/utils/roles";
 import { useTheme } from "@/components/theme-provider";
 import { createClient } from "@/lib/supabase/client";
 
@@ -51,8 +46,8 @@ export function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
   const { theme, toggleTheme } = useTheme();
+  const { profile, serverAdmins, integrations, loading } = useUser();
   const isDark = theme === "dark";
-  const userInitials = initials(currentUser.first_name, currentUser.last_name);
 
   const isActive = (href: string) => {
     if (href === "/dashboard") return pathname === "/dashboard";
@@ -153,28 +148,34 @@ export function Sidebar() {
           </span>
         </button>
 
-        <div className="mt-1 flex items-center gap-3 rounded-lg px-3 py-2">
-          <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-indigo-600 text-xs font-semibold text-white">{userInitials}</div>
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-medium text-slate-900 dark:text-slate-100">{currentUser.first_name} {currentUser.last_name}</p>
-            <p className="truncate text-[11px] text-slate-400 dark:text-slate-500">{currentUser.title}</p>
-          </div>
-          <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${getRoleBadgeColor(currentUser.role)}`}>{getRoleLabel(currentUser.role)}</span>
-        </div>
+        {!loading && profile && (
+          <>
+            <div className="mt-1 flex items-center gap-3 rounded-lg px-3 py-2">
+              <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-indigo-600 text-xs font-semibold text-white">
+                {initials(profile.first_name, profile.last_name)}
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-medium text-slate-900 dark:text-slate-100">{profile.first_name} {profile.last_name}</p>
+                <p className="truncate text-[11px] text-slate-400 dark:text-slate-500">{profile.title}</p>
+              </div>
+              <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${getRoleBadgeColor(profile.role)}`}>{getRoleLabel(profile.role)}</span>
+            </div>
 
-        {currentUser.role === "creator" && serverAdmins.some((sa) => sa.profile_id === currentUser.id) && (
-          <Link
-            href="/dashboard/admin"
-            className={`relative flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
-              isActive("/dashboard/admin")
-                ? "bg-rose-50 text-rose-700 dark:bg-rose-500/20 dark:text-rose-300"
-                : "text-rose-500 hover:bg-rose-50 hover:text-rose-700 dark:text-rose-300 dark:hover:bg-rose-500/15"
-            }`}
-          >
-            {isActive("/dashboard/admin") && <span className="absolute left-0 top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-r-full bg-rose-600 dark:bg-rose-400" />}
-            <Shield className="h-[18px] w-[18px]" />
-            Admin Panel
-          </Link>
+            {profile.role === "creator" && serverAdmins.some((sa) => sa.profile_id === profile.id) && (
+              <Link
+                href="/dashboard/admin"
+                className={`relative flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+                  isActive("/dashboard/admin")
+                    ? "bg-rose-50 text-rose-700 dark:bg-rose-500/20 dark:text-rose-300"
+                    : "text-rose-500 hover:bg-rose-50 hover:text-rose-700 dark:text-rose-300 dark:hover:bg-rose-500/15"
+                }`}
+              >
+                {isActive("/dashboard/admin") && <span className="absolute left-0 top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-r-full bg-rose-600 dark:bg-rose-400" />}
+                <Shield className="h-[18px] w-[18px]" />
+                Admin Panel
+              </Link>
+            )}
+          </>
         )}
 
         <button

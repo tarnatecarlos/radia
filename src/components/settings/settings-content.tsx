@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   AlertTriangle,
   Bell,
@@ -14,7 +14,8 @@ import {
   Upload,
   User,
 } from "lucide-react";
-import { currentUser } from "@/lib/mock-data";
+import { useUser } from "@/lib/user-context";
+import { createClient } from "@/lib/supabase/client";
 import { useToast } from "@/components/ui/toast";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 
@@ -26,6 +27,15 @@ interface NotificationPrefs {
   inAppAll: boolean;
   inAppTasks: boolean;
 }
+
+const NOTIF_KEY_MAP: Record<keyof NotificationPrefs, string> = {
+  emailDigest: "email_digest",
+  emailMentions: "email_mentions",
+  slackUpdates: "slack_updates",
+  slackMilestones: "slack_milestones",
+  inAppAll: "in_app_all",
+  inAppTasks: "in_app_tasks",
+};
 
 function Toggle({
   checked, onChange, label, description,
@@ -47,15 +57,17 @@ function Toggle({
 
 export function SettingsContent() {
   const { toast } = useToast();
+  const { profile, workspace, refresh } = useUser();
+  const supabase = createClient();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const [workspaceName, setWorkspaceName] = useState("Radia Corp");
-  const [subdomain, setSubdomain] = useState("radiacorp");
+  const [workspaceName, setWorkspaceName] = useState("");
+  const [subdomain, setSubdomain] = useState("");
   const [logoPreview, setLogoPreview] = useState<string | null>(null);
-  const [firstName, setFirstName] = useState(currentUser.first_name);
-  const [lastName, setLastName] = useState(currentUser.last_name);
-  const [email, setEmail] = useState(currentUser.email);
-  const [title, setTitle] = useState(currentUser.title ?? "");
+  const [firstName, setFirstName] = useState("");
+  const [lastName, setLastName] = useState("");
+  const [email, setEmail] = useState("");
+  const [title, setTitle] = useState("");
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -67,46 +79,174 @@ export function SettingsContent() {
     slackMilestones: false, inAppAll: true, inAppTasks: true,
   });
 
-  const toggle = (key: keyof NotificationPrefs) => {
-    setNotifications((prev) => ({ ...prev, [key]: !prev[key] }));
-    toast("Notification preference updated");
+  // Initialize form fields from user context
+  useEffect(() => {
+    if (profile) {
+      setFirstName(profile.first_name);
+      setLastName(profile.last_name);
+      setEmail(profile.email);
+      setTitle(profile.title ?? "");
+    }
+  }, [profile]);
+
+  useEffect(() => {
+    if (workspace) {
+      setWorkspaceName(workspace.name);
+      setSubdomain(workspace.subdomain);
+      setLogoPreview(workspace.logo_url ?? null);
+    }
+  }, [workspace]);
+
+  // Fetch notification preferences from Supabase
+  useEffect(() => {
+    if (!profile) return;
+    async function fetchNotifications() {
+      const { data } = await supabase
+        .from("notification_preferences")
+        .select("*")
+        .eq("profile_id", profile!.id)
+        .single();
+      if (data) {
+        setNotifications({
+          emailDigest: data.email_digest ?? true,
+          emailMentions: data.email_mentions ?? true,
+          slackUpdates: data.slack_updates ?? true,
+          slackMilestones: data.slack_milestones ?? false,
+          inAppAll: data.in_app_all ?? true,
+          inAppTasks: data.in_app_tasks ?? true,
+        });
+      }
+    }
+    fetchNotifications();
+  }, [profile]);
+
+  const toggle = async (key: keyof NotificationPrefs) => {
+    if (!profile) return;
+    const newValue = !notifications[key];
+    setNotifications((prev) => ({ ...prev, [key]: newValue }));
+
+    const dbKey = NOTIF_KEY_MAP[key];
+    const { error } = await supabase
+      .from("notification_preferences")
+      .update({ [dbKey]: newValue })
+      .eq("profile_id", profile.id);
+
+    if (error) {
+      // Revert on failure
+      setNotifications((prev) => ({ ...prev, [key]: !newValue }));
+      toast("Failed to update preference", "error");
+    } else {
+      toast("Notification preference updated");
+    }
   };
 
-  function handleSaveWorkspace() {
+  async function handleSaveWorkspace() {
+    if (!workspace) return;
     if (!workspaceName.trim()) { toast("Workspace name is required", "error"); return; }
     if (!subdomain.trim()) { toast("Subdomain is required", "error"); return; }
     setSavingWorkspace(true);
-    setTimeout(() => {
-      setSavingWorkspace(false);
+
+    const { error } = await supabase
+      .from("workspaces")
+      .update({ name: workspaceName, subdomain })
+      .eq("id", workspace.id);
+
+    setSavingWorkspace(false);
+    if (error) {
+      toast("Failed to save workspace settings", "error");
+    } else {
+      await refresh();
       toast("Workspace settings saved");
-    }, 600);
+    }
   }
 
-  function handleSaveProfile() {
+  async function handleSaveProfile() {
+    if (!profile) return;
     if (!firstName.trim() || !lastName.trim()) { toast("Name fields are required", "error"); return; }
     if (!email.trim()) { toast("Email is required", "error"); return; }
     if (newPassword && newPassword.length < 8) { toast("Password must be at least 8 characters", "error"); return; }
     if (newPassword && !currentPassword) { toast("Enter current password to change password", "error"); return; }
     setSavingProfile(true);
-    setTimeout(() => {
+
+    const { error } = await supabase
+      .from("profiles")
+      .update({ first_name: firstName, last_name: lastName, email, title })
+      .eq("id", profile.id);
+
+    if (error) {
       setSavingProfile(false);
-      setCurrentPassword(""); setNewPassword("");
-      toast("Profile saved successfully");
-    }, 600);
+      toast("Failed to save profile", "error");
+      return;
+    }
+
+    // Update password if requested
+    if (newPassword) {
+      const { error: pwError } = await supabase.auth.updateUser({ password: newPassword });
+      if (pwError) {
+        setSavingProfile(false);
+        toast(pwError.message || "Failed to update password", "error");
+        return;
+      }
+    }
+
+    await refresh();
+    setSavingProfile(false);
+    setCurrentPassword("");
+    setNewPassword("");
+    toast("Profile saved successfully");
   }
 
-  function handleLogoUpload(e: React.ChangeEvent<HTMLInputElement>) {
+  async function handleLogoUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
-    if (!file) return;
+    if (!file || !workspace) return;
     if (!file.type.startsWith("image/")) { toast("Please select an image file", "error"); return; }
     if (file.size > 2 * 1024 * 1024) { toast("Image must be under 2MB", "error"); return; }
-    const reader = new FileReader();
-    reader.onload = () => { setLogoPreview(reader.result as string); toast("Logo uploaded"); };
-    reader.readAsDataURL(file);
+
+    const ext = file.name.split(".").pop() ?? "png";
+    const filePath = `logos/${workspace.id}.${ext}`;
+
+    const { error: uploadError } = await supabase.storage
+      .from("workspace-assets")
+      .upload(filePath, file, { upsert: true });
+
+    if (uploadError) {
+      toast("Failed to upload logo", "error");
+      return;
+    }
+
+    const { data: urlData } = supabase.storage
+      .from("workspace-assets")
+      .getPublicUrl(filePath);
+
+    const logoUrl = urlData.publicUrl;
+
+    const { error: updateError } = await supabase
+      .from("workspaces")
+      .update({ logo_url: logoUrl })
+      .eq("id", workspace.id);
+
+    if (updateError) {
+      toast("Failed to update logo URL", "error");
+      return;
+    }
+
+    setLogoPreview(logoUrl);
+    await refresh();
+    toast("Logo uploaded");
   }
 
-  function handleDeleteWorkspace() {
-    toast("Workspace deleted", "error");
+  async function handleDeleteWorkspace() {
+    if (!workspace) return;
+    const { error } = await supabase
+      .from("workspaces")
+      .delete()
+      .eq("id", workspace.id);
+
+    if (error) {
+      toast("Failed to delete workspace", "error");
+    } else {
+      toast("Workspace deleted", "error");
+    }
     setShowDeleteConfirm(false);
   }
 

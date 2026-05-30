@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef, useState, type ComponentType, type DragEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type ComponentType, type DragEvent } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   Disc,
@@ -14,8 +14,9 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { tasks as initialTasks, profiles } from "@/lib/mock-data";
-import type { Task, TaskPriority, TaskStatus } from "@/lib/types";
+import { useUser } from "@/lib/user-context";
+import { createClient } from "@/lib/supabase/client";
+import type { Profile, Task, TaskPriority, TaskStatus } from "@/lib/types";
 import { useToast } from "@/components/ui/toast";
 
 type ViewMode = "table" | "list" | "kanban";
@@ -127,7 +128,13 @@ function TaskCard({
 
 export function TasksContent() {
   const { toast } = useToast();
-  const [taskList, setTaskList] = useState<Task[]>(() => [...initialTasks]);
+  const { profile, loading: userLoading } = useUser();
+  const supabase = createClient();
+
+  const [taskList, setTaskList] = useState<Task[]>([]);
+  const [profilesList, setProfilesList] = useState<Profile[]>([]);
+  const [dataLoading, setDataLoading] = useState(true);
+
   const [view, setView] = useState<ViewMode>("kanban");
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [overColumn, setOverColumn] = useState<ColumnKey | null>(null);
@@ -140,6 +147,35 @@ export function TasksContent() {
   const [newPriority, setNewPriority] = useState<TaskPriority>("MEDIUM");
   const [newAssignee, setNewAssignee] = useState("");
   const [newStatus, setNewStatus] = useState<TaskStatus>("TODO");
+
+  // Fetch tasks and profiles on mount / when profile is available
+  useEffect(() => {
+    if (!profile) return;
+
+    async function fetchData() {
+      setDataLoading(true);
+      const [tasksResult, profilesResult] = await Promise.all([
+        supabase
+          .from("tasks")
+          .select("*, assignee:profiles!tasks_assignee_id_fkey(*)")
+          .eq("workspace_id", profile!.workspace_id),
+        supabase
+          .from("profiles")
+          .select("*")
+          .eq("workspace_id", profile!.workspace_id),
+      ]);
+
+      if (tasksResult.data) {
+        setTaskList(tasksResult.data as Task[]);
+      }
+      if (profilesResult.data) {
+        setProfilesList(profilesResult.data as Profile[]);
+      }
+      setDataLoading(false);
+    }
+
+    fetchData();
+  }, [profile]);
 
   const handleDragStart = useCallback((e: DragEvent<HTMLDivElement>, taskId: string) => {
     e.dataTransfer.setData("text/plain", taskId);
@@ -170,32 +206,87 @@ export function TasksContent() {
     e.preventDefault(); e.dataTransfer.dropEffect = "move";
   }, []);
 
-  const handleDrop = useCallback((e: DragEvent<HTMLDivElement>, targetStatus: ColumnKey) => {
+  const handleDrop = useCallback(async (e: DragEvent<HTMLDivElement>, targetStatus: ColumnKey) => {
     e.preventDefault();
     const taskId = e.dataTransfer.getData("text/plain");
     if (!taskId) return;
+
+    // Optimistic update
     setTaskList((prev) => prev.map((t) => (t.id === taskId ? { ...t, status: targetStatus, updated_at: new Date().toISOString() } : t)));
     setDraggingId(null); setOverColumn(null); dragCounterRef.current = {};
     toast(`Task moved to ${columns.find((c) => c.key === targetStatus)?.label}`);
-  }, [toast]);
 
-  const handleDelete = useCallback((id: string) => {
+    // Persist to Supabase
+    const { error } = await supabase
+      .from("tasks")
+      .update({ status: targetStatus, updated_at: new Date().toISOString() })
+      .eq("id", taskId);
+
+    if (error) {
+      toast("Failed to update task status", "error");
+    }
+  }, [toast, supabase]);
+
+  const handleDelete = useCallback(async (id: string) => {
+    // Optimistic update
+    const previousTasks = taskList;
     setTaskList((prev) => prev.filter((t) => t.id !== id));
     toast("Task deleted");
-  }, [toast]);
 
-  function handleCreate() {
+    // Persist to Supabase
+    const { error } = await supabase
+      .from("tasks")
+      .delete()
+      .eq("id", id);
+
+    if (error) {
+      toast("Failed to delete task", "error");
+      setTaskList(previousTasks);
+    }
+  }, [toast, supabase, taskList]);
+
+  async function handleCreate() {
     if (!newTitle.trim()) { toast("Task title is required", "error"); return; }
-    const assignee = profiles.find((p) => p.id === newAssignee);
-    const task: Task = {
-      id: `t${Date.now()}`, workspace_id: "w1", title: newTitle.trim(),
-      description: newDesc.trim() || undefined, status: newStatus,
-      priority: newPriority, creator_id: "u1", assignee_id: newAssignee || undefined,
-      assignee, created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+    if (!profile) return;
+
+    const assignee = profilesList.find((p) => p.id === newAssignee);
+
+    const insertData: Record<string, unknown> = {
+      workspace_id: profile.workspace_id,
+      title: newTitle.trim(),
+      description: newDesc.trim() || null,
+      status: newStatus,
+      priority: newPriority,
+      creator_id: profile.id,
+      assignee_id: newAssignee || null,
     };
-    setTaskList((prev) => [task, ...prev]);
+
+    const { data, error } = await supabase
+      .from("tasks")
+      .insert(insertData)
+      .select("*, assignee:profiles!tasks_assignee_id_fkey(*)")
+      .single();
+
+    if (error) {
+      toast("Failed to create task", "error");
+      return;
+    }
+
+    setTaskList((prev) => [data as Task, ...prev]);
     toast("Task created successfully");
     setShowCreate(false); setNewTitle(""); setNewDesc(""); setNewPriority("MEDIUM"); setNewAssignee(""); setNewStatus("TODO");
+  }
+
+  // Loading state
+  if (userLoading || dataLoading) {
+    return (
+      <div className="flex h-full items-center justify-center">
+        <div className="flex flex-col items-center gap-3">
+          <div className="h-8 w-8 animate-spin rounded-full border-4 border-slate-200 border-t-indigo-600" />
+          <p className="text-sm text-slate-500 dark:text-slate-400">Loading tasks...</p>
+        </div>
+      </div>
+    );
   }
 
   const grouped = columns.reduce((acc, col) => {
@@ -367,7 +458,7 @@ export function TasksContent() {
                     <span className="mb-1 block text-sm font-medium text-slate-600 dark:text-slate-300">Assignee</span>
                     <select value={newAssignee} onChange={(e) => setNewAssignee(e.target.value)} className="radia-input w-full px-3 py-2.5 text-sm text-slate-900 dark:text-slate-100">
                       <option value="">Unassigned</option>
-                      {profiles.map((p) => (<option key={p.id} value={p.id}>{p.first_name} {p.last_name}</option>))}
+                      {profilesList.map((p) => (<option key={p.id} value={p.id}>{p.first_name} {p.last_name}</option>))}
                     </select>
                   </label>
                 </div>

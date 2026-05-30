@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -15,15 +15,10 @@ import {
   Users,
   X,
 } from "lucide-react";
-import {
-  courses,
-  enrollments,
-  profiles as initialProfiles,
-  sops,
-  tasks as initialTasks,
-} from "@/lib/mock-data";
-import type { Task, TaskPriority, TaskStatus, Profile } from "@/lib/types";
+import type { Task, TaskPriority, TaskStatus, Profile, Course, CourseEnrollment } from "@/lib/types";
 import { useToast } from "@/components/ui/toast";
+import { useUser } from "@/lib/user-context";
+import { createClient } from "@/lib/supabase/client";
 
 function formatDate(date: Date) {
   return date.toLocaleDateString("en-US", {
@@ -61,7 +56,11 @@ function getAvatarColor(id: string) {
   return avatarColorClasses[parsed % avatarColorClasses.length];
 }
 
-function getOnboardingRows(profiles: Profile[]) {
+function getOnboardingRows(
+  profiles: Profile[],
+  enrollments: CourseEnrollment[],
+  courses: Course[],
+) {
   const incompleteProfiles = profiles.filter((p) => !p.onboarding_completed);
   return incompleteProfiles.map((profile) => {
     const userEnrollments = enrollments.filter((e) => e.profile_id === profile.id);
@@ -107,10 +106,15 @@ type ModalType = "task" | "employee" | "sop" | null;
 export function DashboardContent() {
   const router = useRouter();
   const { toast } = useToast();
+  const { profile, loading: userLoading } = useUser();
   const currentDate = formatDate(new Date());
 
-  const [taskList, setTaskList] = useState<Task[]>(() => [...initialTasks]);
-  const [profilesList, setProfilesList] = useState<Profile[]>(() => [...initialProfiles]);
+  const [taskList, setTaskList] = useState<Task[]>([]);
+  const [profilesList, setProfilesList] = useState<Profile[]>([]);
+  const [sopCount, setSopCount] = useState(0);
+  const [coursesList, setCoursesList] = useState<Course[]>([]);
+  const [enrollmentsList, setEnrollmentsList] = useState<CourseEnrollment[]>([]);
+  const [dataLoading, setDataLoading] = useState(true);
   const [modal, setModal] = useState<ModalType>(null);
 
   // Task form
@@ -130,8 +134,58 @@ export function DashboardContent() {
   const [sopTitle, setSopTitle] = useState("");
   const [sopCategory, setSopCategory] = useState("General");
 
+  const fetchData = useCallback(async () => {
+    if (!profile) return;
+    const supabase = createClient();
+    setDataLoading(true);
+
+    const [profilesRes, tasksRes, sopsRes, coursesRes, enrollmentsRes] = await Promise.all([
+      supabase
+        .from("profiles")
+        .select("*")
+        .eq("workspace_id", profile.workspace_id),
+      supabase
+        .from("tasks")
+        .select("*, assignee:profiles!tasks_assignee_id_fkey(*)")
+        .eq("workspace_id", profile.workspace_id)
+        .order("updated_at", { ascending: false }),
+      supabase
+        .from("sops")
+        .select("id", { count: "exact", head: true })
+        .eq("workspace_id", profile.workspace_id),
+      supabase
+        .from("courses")
+        .select("*, lessons(*)")
+        .eq("workspace_id", profile.workspace_id),
+      supabase
+        .from("course_enrollments")
+        .select("*"),
+    ]);
+
+    setProfilesList((profilesRes.data as Profile[]) ?? []);
+    setTaskList((tasksRes.data as Task[]) ?? []);
+    setSopCount(sopsRes.count ?? 0);
+    setCoursesList((coursesRes.data as Course[]) ?? []);
+    setEnrollmentsList((enrollmentsRes.data as CourseEnrollment[]) ?? []);
+    setDataLoading(false);
+  }, [profile]);
+
+  useEffect(() => {
+    if (!userLoading && profile) {
+      fetchData();
+    }
+  }, [userLoading, profile, fetchData]);
+
+  if (userLoading || dataLoading) {
+    return (
+      <div className="flex min-h-[50vh] items-center justify-center">
+        <div className="text-sm text-slate-400">Loading dashboard...</div>
+      </div>
+    );
+  }
+
   const activeTasks = taskList.filter((t) => t.status !== "DONE").length;
-  const onboardingRows = getOnboardingRows(profilesList);
+  const onboardingRows = getOnboardingRows(profilesList, enrollmentsList, coursesList);
   const overallOnboarding = (() => {
     const total = onboardingRows.reduce((s, r) => s + r.totalLessons, 0);
     const done = onboardingRows.reduce((s, r) => s + r.completedLessons, 0);
@@ -143,7 +197,7 @@ export function DashboardContent() {
     { label: "Total Employees", value: profilesList.length, icon: Users, tone: "text-indigo-600 bg-indigo-50", sub: `${profilesList.length} active members` },
     { label: "Active Tasks", value: activeTasks, icon: CheckSquare, tone: "text-sky-600 bg-sky-50", sub: `${taskList.filter((t) => t.status === "TODO").length} pending` },
     { label: "Onboarding", value: `${overallOnboarding}%`, icon: GraduationCap, tone: "text-amber-600 bg-amber-50", sub: `${onboardingRows.length} in progress` },
-    { label: "SOPs Published", value: sops.length, icon: BookOpen, tone: "text-violet-600 bg-violet-50", sub: "Updated recently" },
+    { label: "SOPs Published", value: sopCount, icon: BookOpen, tone: "text-violet-600 bg-violet-50", sub: "Updated recently" },
   ];
 
   function resetForms() {
@@ -152,38 +206,89 @@ export function DashboardContent() {
     setSopTitle(""); setSopCategory("General");
   }
 
-  function handleCreateTask() {
+  async function handleCreateTask() {
     if (!taskTitle.trim()) { toast("Task title is required", "error"); return; }
-    const assignee = profilesList.find((p) => p.id === taskAssignee);
-    const newTask: Task = {
-      id: `t${Date.now()}`, workspace_id: "w1", title: taskTitle.trim(),
-      description: taskDesc.trim() || undefined, status: "TODO" as TaskStatus,
-      priority: taskPriority, creator_id: "u1", assignee_id: taskAssignee || undefined,
-      assignee, created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
-    };
-    setTaskList((prev) => [newTask, ...prev]);
+    if (!profile) return;
+
+    const supabase = createClient();
+    const { data, error } = await supabase
+      .from("tasks")
+      .insert({
+        workspace_id: profile.workspace_id,
+        title: taskTitle.trim(),
+        description: taskDesc.trim() || null,
+        status: "TODO",
+        priority: taskPriority,
+        creator_id: profile.id,
+        assignee_id: taskAssignee || null,
+      })
+      .select("*, assignee:profiles!tasks_assignee_id_fkey(*)")
+      .single();
+
+    if (error) {
+      toast("Failed to create task", "error");
+      return;
+    }
+
+    setTaskList((prev) => [data as Task, ...prev]);
     toast("Task created successfully");
     setModal(null); resetForms();
   }
 
-  function handleAddEmployee() {
+  async function handleAddEmployee() {
     if (!empFirst.trim() || !empLast.trim() || !empEmail.trim()) {
       toast("First name, last name, and email are required", "error"); return;
     }
-    const newProfile: Profile = {
-      id: `u${Date.now()}`, workspace_id: "w1", email: empEmail.trim(),
-      first_name: empFirst.trim(), last_name: empLast.trim(), role: "user",
-      title: empTitle.trim() || undefined, manager_id: empManager || null,
-      onboarding_completed: false, started_date: new Date().toISOString().split("T")[0],
-      created_at: new Date().toISOString(),
-    };
-    setProfilesList((prev) => [...prev, newProfile]);
+    if (!profile) return;
+
+    const supabase = createClient();
+    const { data, error } = await supabase
+      .from("profiles")
+      .insert({
+        workspace_id: profile.workspace_id,
+        email: empEmail.trim(),
+        first_name: empFirst.trim(),
+        last_name: empLast.trim(),
+        role: "user",
+        title: empTitle.trim() || null,
+        manager_id: empManager || null,
+        onboarding_completed: false,
+        started_date: new Date().toISOString().split("T")[0],
+      })
+      .select()
+      .single();
+
+    if (error) {
+      toast("Failed to add employee", "error");
+      return;
+    }
+
+    setProfilesList((prev) => [...prev, data as Profile]);
     toast(`${empFirst} ${empLast} added successfully`);
     setModal(null); resetForms();
   }
 
-  function handleCreateSOP() {
+  async function handleCreateSOP() {
     if (!sopTitle.trim()) { toast("SOP title is required", "error"); return; }
+    if (!profile) return;
+
+    const supabase = createClient();
+    const { error } = await supabase
+      .from("sops")
+      .insert({
+        workspace_id: profile.workspace_id,
+        title: sopTitle.trim(),
+        content: "",
+        category: sopCategory,
+        version: 1,
+        last_updated_by: profile.id,
+      });
+
+    if (error) {
+      toast("Failed to create SOP", "error");
+      return;
+    }
+
     toast("SOP created successfully");
     setModal(null); resetForms();
     router.push("/dashboard/sops");
@@ -193,7 +298,7 @@ export function DashboardContent() {
     <div className="space-y-6 pb-5">
       <motion.div variants={cardVariants} initial="hidden" animate="visible" custom={0}>
         <h1 className="text-3xl font-bold tracking-tight text-slate-900 dark:text-slate-100">
-          Welcome back, Alex
+          Welcome back, {profile?.first_name ?? "there"}
         </h1>
         <p className="mt-1 text-sm text-slate-400 dark:text-slate-500">{currentDate}</p>
       </motion.div>

@@ -1,4 +1,5 @@
 import { Sidebar } from "@/components/layout/sidebar";
+import { UserProvider } from "@/lib/user-context";
 
 export default function DashboardLayout({
   children,
@@ -6,14 +7,16 @@ export default function DashboardLayout({
   children: React.ReactNode;
 }) {
   return (
-    <div className="flex h-screen overflow-hidden bg-slate-50 dark:bg-slate-950">
-      <aside className="w-60 flex-shrink-0">
-        <Sidebar />
-      </aside>
+    <UserProvider>
+      <div className="flex h-screen overflow-hidden bg-slate-50 dark:bg-slate-950">
+        <aside className="w-60 flex-shrink-0">
+          <Sidebar />
+        </aside>
 
-      <main className="flex-1 overflow-y-auto px-6 py-5 lg:px-8">
-        {children}
-      </main>
-    </div>
+        <main className="flex-1 overflow-y-auto px-6 py-5 lg:px-8">
+          {children}
+        </main>
+      </div>
+    </UserProvider>
   );
 }

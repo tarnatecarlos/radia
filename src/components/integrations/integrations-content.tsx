@@ -1,10 +1,20 @@
 "use client";
 
-import { useState, type ComponentType, type CSSProperties } from "react";
+import { useState, useEffect, useCallback, type ComponentType, type CSSProperties } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { GitBranch, Hash, Mail, MessageSquare, Send, Settings, Users, X, Zap } from "lucide-react";
-import { integrations as initialIntegrations } from "@/lib/mock-data";
+import { useUser } from "@/lib/user-context";
+import { createClient } from "@/lib/supabase/client";
 import { useToast } from "@/components/ui/toast";
+
+interface IntegrationRow {
+  id: string;
+  workspace_id: string;
+  platform_name: string;
+  is_active: boolean;
+  config: Record<string, string> | null;
+  created_at: string;
+}
 
 interface IntegrationConfig {
   label: string;
@@ -76,18 +86,43 @@ const iconMap: Record<string, ComponentType<{ className?: string }>> = {
 
 export function IntegrationsContent() {
   const { toast } = useToast();
-  const [integrationStates, setIntegrationStates] = useState(() => initialIntegrations.map((item) => ({ ...item })));
+  const { profile, refresh } = useUser();
+  const supabase = createClient();
+
+  const [integrationStates, setIntegrationStates] = useState<IntegrationRow[]>([]);
+  const [loading, setLoading] = useState(true);
   const [configuring, setConfiguring] = useState<string | null>(null);
   const [configValues, setConfigValues] = useState<Record<string, string>>({});
   const connectedCount = integrationStates.filter((item) => item.is_active).length;
 
-  const toggleIntegration = (id: string) => {
-    setIntegrationStates((prev) => prev.map((item) => {
-      if (item.id !== id) return item;
-      const next = !item.is_active;
-      toast(next ? `${platformConfig[item.platform_name]?.label} connected` : `${platformConfig[item.platform_name]?.label} disconnected`);
-      return { ...item, is_active: next };
-    }));
+  const fetchIntegrations = useCallback(async () => {
+    if (!profile?.workspace_id) return;
+    const { data } = await supabase.from("integrations").select("*").eq("workspace_id", profile.workspace_id);
+    if (data) setIntegrationStates(data as IntegrationRow[]);
+    setLoading(false);
+  }, [profile?.workspace_id, supabase]);
+
+  useEffect(() => {
+    fetchIntegrations();
+  }, [fetchIntegrations]);
+
+  const toggleIntegration = async (id: string) => {
+    const item = integrationStates.find((i) => i.id === id);
+    if (!item) return;
+    const next = !item.is_active;
+
+    // Optimistic update
+    setIntegrationStates((prev) => prev.map((i) => (i.id === id ? { ...i, is_active: next } : i)));
+    toast(next ? `${platformConfig[item.platform_name]?.label} connected` : `${platformConfig[item.platform_name]?.label} disconnected`);
+
+    const { error } = await supabase.from("integrations").update({ is_active: next }).eq("id", id);
+    if (error) {
+      // Revert on failure
+      setIntegrationStates((prev) => prev.map((i) => (i.id === id ? { ...i, is_active: !next } : i)));
+      toast("Failed to update integration", "error");
+      return;
+    }
+    await refresh();
   };
 
   const openConfigure = (platformName: string) => {
@@ -95,19 +130,37 @@ export function IntegrationsContent() {
     setConfigValues({});
   };
 
-  const handleSaveConfig = () => {
+  const handleSaveConfig = async () => {
     const config = platformConfig[configuring!];
     const hasEmpty = config?.configFields.some((f) => !configValues[f.label]?.trim());
     if (hasEmpty) {
       toast("Please fill in all fields", "error");
       return;
     }
+
+    const integration = integrationStates.find((i) => i.platform_name === configuring);
+    if (!integration) return;
+
+    const { error } = await supabase.from("integrations").update({ config: configValues }).eq("id", integration.id);
+    if (error) {
+      toast("Failed to save configuration", "error");
+      return;
+    }
+
     toast(`${config?.label} configuration saved`);
     setConfiguring(null);
     setConfigValues({});
   };
 
   const configuringConfig = configuring ? platformConfig[configuring] : null;
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-20">
+        <div className="h-8 w-8 animate-spin rounded-full border-4 border-indigo-600 border-t-transparent" />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-5">

@@ -12,8 +12,11 @@ import {
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
-import { buildOrgTree, integrations, profiles } from "@/lib/mock-data";
+import { useUser } from "@/lib/user-context";
+import { createClient } from "@/lib/supabase/client";
+import { buildOrgTree } from "@/lib/utils/roles";
 import type { OrgNode } from "@/lib/types";
+import type { Profile } from "@/lib/types";
 
 type LayoutMode = "top-down" | "left-right";
 
@@ -180,11 +183,42 @@ function ConnectorLines({
 }
 
 export function OrgChartContent() {
-  const root = useMemo(() => buildOrgTree(profiles) as OrgNode, []);
+  const { profile, integrations } = useUser();
+  const [profilesList, setProfilesList] = useState<Profile[]>([]);
+  const [loadingProfiles, setLoadingProfiles] = useState(true);
+
+  useEffect(() => {
+    if (!profile?.workspace_id) return;
+
+    let cancelled = false;
+    async function fetchProfiles() {
+      setLoadingProfiles(true);
+      const supabase = createClient();
+      const { data } = await supabase.from("profiles").select("*").eq("workspace_id", profile!.workspace_id);
+      if (!cancelled) {
+        setProfilesList((data as Profile[]) ?? []);
+        setLoadingProfiles(false);
+      }
+    }
+
+    fetchProfiles();
+    return () => { cancelled = true; };
+  }, [profile?.workspace_id]);
+
+  const root = useMemo(() => {
+    if (profilesList.length === 0) return null;
+    try {
+      return buildOrgTree(profilesList);
+    } catch {
+      return null;
+    }
+  }, [profilesList]);
+
   const [layout, setLayout] = useState<LayoutMode>("top-down");
 
   const positions = useMemo(() => {
     const next = new Map<string, Position>();
+    if (!root) return next;
     if (layout === "top-down") {
       layoutTopDown(root, 0, 0, next);
     } else {
@@ -195,7 +229,9 @@ export function OrgChartContent() {
 
   const flatNodes = useMemo(() => {
     const list: FlatNode[] = [];
-    flattenTree(root, list, null);
+    if (root) {
+      flattenTree(root, list, null);
+    }
     return list;
   }, [root]);
 
@@ -205,10 +241,10 @@ export function OrgChartContent() {
   const canvasRef = useRef<HTMLDivElement>(null);
   const panRef = useRef<{ mouseX: number; mouseY: number; viewX: number; viewY: number } | null>(null);
 
-  const selectedPerson = selectedId ? profiles.find((profile) => profile.id === selectedId) : null;
-  const selectedReports = selectedPerson ? profiles.filter((profile) => profile.manager_id === selectedPerson.id) : [];
+  const selectedPerson = selectedId ? profilesList.find((p) => p.id === selectedId) : null;
+  const selectedReports = selectedPerson ? profilesList.filter((p) => p.manager_id === selectedPerson.id) : [];
   const selectedManager = selectedPerson?.manager_id
-    ? profiles.find((profile) => profile.id === selectedPerson.manager_id)
+    ? profilesList.find((p) => p.id === selectedPerson.manager_id)
     : null;
 
   const fitToScreen = useCallback(() => {
@@ -313,11 +349,22 @@ export function OrgChartContent() {
     }
   };
 
+  if (loadingProfiles) {
+    return (
+      <div className="flex min-h-[620px] items-center justify-center rounded-xl border border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-950">
+        <div className="flex flex-col items-center gap-3">
+          <div className="h-8 w-8 animate-spin rounded-full border-4 border-slate-200 border-t-indigo-600 dark:border-slate-700 dark:border-t-indigo-400" />
+          <p className="text-sm text-slate-500 dark:text-slate-400">Loading organization chart...</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-4">
       <div>
         <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-slate-100">Organization Chart</h1>
-        <p className="mt-1 text-sm text-slate-400 dark:text-slate-500">{profiles.length} employees across the organization</p>
+        <p className="mt-1 text-sm text-slate-400 dark:text-slate-500">{profilesList.length} employees across the organization</p>
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
@@ -377,7 +424,7 @@ export function OrgChartContent() {
               return null;
             }
 
-            const reports = profiles.filter((profile) => profile.manager_id === node.id).length;
+            const reports = profilesList.filter((p) => p.manager_id === node.id).length;
             const isSelected = selectedId === node.id;
             const roleTone = getRoleTone(node.role);
 

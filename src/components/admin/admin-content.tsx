@@ -1,21 +1,32 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Activity, AlertTriangle, Building, Clock, Database, HardDrive, Shield, UserCheck, UserX,
 } from "lucide-react";
-import {
-  adminRequests, getProfileById, getRoleBadgeColor, getRoleLabel, serverAdmins,
-} from "@/lib/mock-data";
-import type { AdminRequestStatus } from "@/lib/types";
+import { useUser } from "@/lib/user-context";
+import { createClient } from "@/lib/supabase/client";
+import { getRoleBadgeColor, getRoleLabel } from "@/lib/utils/roles";
+import type { AdminRequest, AdminRequestStatus, ServerAdmin, Profile } from "@/lib/types";
 import { useToast } from "@/components/ui/toast";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 
-const initialAuditLog = [
-  { id: "al1", action: "Approved access request for Marcus Johnson", actor: "Alex Rivera", timestamp: "2024-07-18T14:32:00Z" },
-  { id: "al2", action: "Workspace 'Radia Corp' settings updated", actor: "Alex Rivera", timestamp: "2024-07-17T09:15:00Z" },
-  { id: "al3", action: "New integration configured: Gmail", actor: "Sarah Chen", timestamp: "2024-07-16T16:48:00Z" },
-];
+interface AdminRequestWithProfile extends AdminRequest {
+  profile?: Profile | null;
+}
+
+interface ServerAdminWithProfile extends ServerAdmin {
+  profile?: Profile | null;
+}
+
+interface AuditLogEntry {
+  id: string;
+  action: string;
+  actor_id?: string;
+  created_at: string;
+  workspace_id?: string;
+  metadata?: Record<string, unknown>;
+}
 
 function formatDate(dateStr: string) {
   return new Date(dateStr).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
@@ -33,55 +44,147 @@ function StatusPill({ status }: { status: AdminRequestStatus }) {
 
 export function AdminContent() {
   const { toast } = useToast();
-  const [requestStatuses, setRequestStatuses] = useState<Record<string, AdminRequestStatus>>(() => {
-    const result: Record<string, AdminRequestStatus> = {};
-    adminRequests.forEach((r) => { result[r.id] = r.status; });
-    return result;
-  });
-  const [auditLog, setAuditLog] = useState(initialAuditLog);
+  const { profile, workspace } = useUser();
+  const supabase = createClient();
+
+  const [requests, setRequests] = useState<AdminRequestWithProfile[]>([]);
+  const [admins, setAdmins] = useState<ServerAdminWithProfile[]>([]);
+  const [auditLog, setAuditLog] = useState<AuditLogEntry[]>([]);
+  const [profileMap, setProfileMap] = useState<Record<string, Profile>>({});
   const [workspacePaused, setWorkspacePaused] = useState(false);
   const [showDeleteWorkspace, setShowDeleteWorkspace] = useState(false);
   const [showPauseConfirm, setShowPauseConfirm] = useState(false);
 
-  const pendingCount = adminRequests.filter((r) => requestStatuses[r.id] === "pending").length;
+  const workspaceName = workspace?.name ?? "Workspace";
+  const actorName = profile ? `${profile.first_name} ${profile.last_name}` : "Unknown";
 
-  function handleApprove(requestId: string) {
-    const request = adminRequests.find((r) => r.id === requestId);
-    const profile = request ? getProfileById(request.profile_id) : null;
-    setRequestStatuses((prev) => ({ ...prev, [requestId]: "approved" }));
-    const name = profile ? `${profile.first_name} ${profile.last_name}` : "User";
+  useEffect(() => {
+    if (!profile) return;
+
+    async function fetchData() {
+      const [reqResult, adminResult, logResult, profileResult] = await Promise.all([
+        supabase.from("admin_requests").select("*, profile:profiles(*)").order("created_at", { ascending: false }),
+        supabase.from("server_admins").select("*, profile:profiles(*)").order("granted_at"),
+        supabase.from("audit_log").select("*").eq("workspace_id", profile!.workspace_id).order("created_at", { ascending: false }).limit(20),
+        supabase.from("profiles").select("*").eq("workspace_id", profile!.workspace_id),
+      ]);
+
+      if (reqResult.data) setRequests(reqResult.data as AdminRequestWithProfile[]);
+      if (adminResult.data) setAdmins(adminResult.data as ServerAdminWithProfile[]);
+      if (logResult.data) setAuditLog(logResult.data as AuditLogEntry[]);
+      if (profileResult.data) {
+        const map: Record<string, Profile> = {};
+        (profileResult.data as Profile[]).forEach((p) => { map[p.id] = p; });
+        setProfileMap(map);
+      }
+    }
+
+    fetchData();
+  }, [profile]);
+
+  const pendingCount = requests.filter((r) => r.status === "pending").length;
+
+  function getProfileName(request: AdminRequestWithProfile): string {
+    if (request.profile) return `${request.profile.first_name} ${request.profile.last_name}`;
+    const p = profileMap[request.profile_id];
+    return p ? `${p.first_name} ${p.last_name}` : "Unknown";
+  }
+
+  function getAdminProfileName(admin: ServerAdminWithProfile): string {
+    if (admin.profile) return `${admin.profile.first_name} ${admin.profile.last_name}`;
+    const p = profileMap[admin.profile_id];
+    return p ? `${p.first_name} ${p.last_name}` : "Unknown";
+  }
+
+  function getActorName(actorId?: string): string {
+    if (!actorId) return "System";
+    const p = profileMap[actorId];
+    return p ? `${p.first_name} ${p.last_name}` : "Unknown";
+  }
+
+  async function handleApprove(requestId: string) {
+    if (!profile) return;
+    const request = requests.find((r) => r.id === requestId);
+    const name = request ? getProfileName(request) : "User";
+
+    await supabase.from("admin_requests").update({
+      status: "approved",
+      reviewed_at: new Date().toISOString(),
+      reviewed_by: profile.id,
+    }).eq("id", requestId);
+
+    await supabase.from("audit_log").insert({
+      workspace_id: profile.workspace_id,
+      actor_id: profile.id,
+      action: `Approved access request for ${name}`,
+      metadata: {},
+    });
+
+    setRequests((prev) => prev.map((r) => r.id === requestId ? { ...r, status: "approved" as AdminRequestStatus } : r));
     setAuditLog((prev) => [
-      { id: `al${Date.now()}`, action: `Approved access request for ${name}`, actor: "Alex Rivera", timestamp: new Date().toISOString() },
+      { id: `al${Date.now()}`, action: `Approved access request for ${name}`, actor_id: profile.id, created_at: new Date().toISOString() },
       ...prev,
     ]);
     toast(`Access request for ${name} approved`);
   }
 
-  function handleReject(requestId: string) {
-    const request = adminRequests.find((r) => r.id === requestId);
-    const profile = request ? getProfileById(request.profile_id) : null;
-    setRequestStatuses((prev) => ({ ...prev, [requestId]: "rejected" }));
-    const name = profile ? `${profile.first_name} ${profile.last_name}` : "User";
+  async function handleReject(requestId: string) {
+    if (!profile) return;
+    const request = requests.find((r) => r.id === requestId);
+    const name = request ? getProfileName(request) : "User";
+
+    await supabase.from("admin_requests").update({
+      status: "rejected",
+      reviewed_at: new Date().toISOString(),
+      reviewed_by: profile.id,
+    }).eq("id", requestId);
+
+    await supabase.from("audit_log").insert({
+      workspace_id: profile.workspace_id,
+      actor_id: profile.id,
+      action: `Rejected access request for ${name}`,
+      metadata: {},
+    });
+
+    setRequests((prev) => prev.map((r) => r.id === requestId ? { ...r, status: "rejected" as AdminRequestStatus } : r));
     setAuditLog((prev) => [
-      { id: `al${Date.now()}`, action: `Rejected access request for ${name}`, actor: "Alex Rivera", timestamp: new Date().toISOString() },
+      { id: `al${Date.now()}`, action: `Rejected access request for ${name}`, actor_id: profile.id, created_at: new Date().toISOString() },
       ...prev,
     ]);
     toast(`Access request for ${name} rejected`);
   }
 
-  function handlePauseWorkspace() {
+  async function handlePauseWorkspace() {
+    if (!profile) return;
     setWorkspacePaused((prev) => !prev);
     const action = workspacePaused ? "resumed" : "paused";
+
+    await supabase.from("audit_log").insert({
+      workspace_id: profile.workspace_id,
+      actor_id: profile.id,
+      action: `Workspace '${workspaceName}' ${action}`,
+      metadata: {},
+    });
+
     setAuditLog((prev) => [
-      { id: `al${Date.now()}`, action: `Workspace 'Radia Corp' ${action}`, actor: "Alex Rivera", timestamp: new Date().toISOString() },
+      { id: `al${Date.now()}`, action: `Workspace '${workspaceName}' ${action}`, actor_id: profile.id, created_at: new Date().toISOString() },
       ...prev,
     ]);
     toast(`Workspace ${action}`);
   }
 
-  function handleDeleteWorkspace() {
+  async function handleDeleteWorkspace() {
+    if (!profile) return;
+
+    await supabase.from("audit_log").insert({
+      workspace_id: profile.workspace_id,
+      actor_id: profile.id,
+      action: `Workspace '${workspaceName}' deleted`,
+      metadata: {},
+    });
+
     setAuditLog((prev) => [
-      { id: `al${Date.now()}`, action: "Workspace 'Radia Corp' deleted", actor: "Alex Rivera", timestamp: new Date().toISOString() },
+      { id: `al${Date.now()}`, action: `Workspace '${workspaceName}' deleted`, actor_id: profile.id, created_at: new Date().toISOString() },
       ...prev,
     ]);
     toast("Workspace deleted", "error");
@@ -143,18 +246,17 @@ export function AdminContent() {
               </tr>
             </thead>
             <tbody>
-              {adminRequests.map((request) => {
-                const profile = getProfileById(request.profile_id);
-                const status = requestStatuses[request.id];
+              {requests.map((request) => {
+                const name = getProfileName(request);
                 return (
                   <tr key={request.id} className="border-b border-slate-100 dark:border-slate-800">
-                    <td className="px-3 py-3"><p className="font-semibold text-slate-900 dark:text-slate-100">{profile ? `${profile.first_name} ${profile.last_name}` : "Unknown"}</p></td>
+                    <td className="px-3 py-3"><p className="font-semibold text-slate-900 dark:text-slate-100">{name}</p></td>
                     <td className="px-3 py-3"><span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${getRoleBadgeColor(request.requested_role)}`}>{getRoleLabel(request.requested_role)}</span></td>
                     <td className="max-w-[260px] px-3 py-3 text-slate-600 dark:text-slate-300"><p className="truncate">{request.reason}</p></td>
-                    <td className="px-3 py-3"><StatusPill status={status} /></td>
+                    <td className="px-3 py-3"><StatusPill status={request.status} /></td>
                     <td className="px-3 py-3 text-slate-400 dark:text-slate-500">{formatDate(request.created_at)}</td>
                     <td className="px-3 py-3">
-                      {status === "pending" ? (
+                      {request.status === "pending" ? (
                         <div className="flex items-center gap-2">
                           <button onClick={() => handleApprove(request.id)} className="rounded-md bg-emerald-50 px-2.5 py-1.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-500/20 dark:text-emerald-300">Approve</button>
                           <button onClick={() => handleReject(request.id)} className="rounded-md bg-rose-50 px-2.5 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-100 dark:bg-rose-500/20 dark:text-rose-300">Reject</button>
@@ -178,11 +280,11 @@ export function AdminContent() {
             <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100">Server Admins</h2>
           </div>
           <div className="space-y-3">
-            {serverAdmins.map((admin) => {
-              const profile = getProfileById(admin.profile_id);
+            {admins.map((admin) => {
+              const name = getAdminProfileName(admin);
               return (
                 <div key={admin.id} className="rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-900">
-                  <p className="font-semibold text-slate-900 dark:text-slate-100">{profile ? `${profile.first_name} ${profile.last_name}` : "Unknown"}</p>
+                  <p className="font-semibold text-slate-900 dark:text-slate-100">{name}</p>
                   <div className="mt-1 flex items-center gap-2">
                     <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${getRoleBadgeColor(admin.server_role)}`}>{getRoleLabel(admin.server_role)}</span>
                     <span className="text-xs text-slate-400 dark:text-slate-500">since {formatDate(admin.granted_at)}</span>
@@ -200,7 +302,7 @@ export function AdminContent() {
           </div>
           <div className={`rounded-lg border p-4 ${workspacePaused ? "border-amber-300 bg-amber-50/50 dark:border-amber-500/40 dark:bg-amber-500/10" : "border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900"}`}>
             <div className="flex items-center gap-2">
-              <p className="font-semibold text-slate-900 dark:text-slate-100">Radia Corp</p>
+              <p className="font-semibold text-slate-900 dark:text-slate-100">{workspaceName}</p>
               {workspacePaused && <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-700 dark:bg-amber-500/20 dark:text-amber-300">Paused</span>}
             </div>
             <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">10 members - 5 SOPs - 4 courses</p>
@@ -226,7 +328,7 @@ export function AdminContent() {
               <div>
                 <p className="text-sm text-slate-700 dark:text-slate-200">{entry.action}</p>
                 <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">
-                  {entry.actor} - {new Date(entry.timestamp).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
+                  {getActorName(entry.actor_id)} - {new Date(entry.created_at).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
                 </p>
               </div>
             </div>
@@ -239,7 +341,7 @@ export function AdminContent() {
         onClose={() => setShowPauseConfirm(false)}
         onConfirm={handlePauseWorkspace}
         title={workspacePaused ? "Resume Workspace" : "Pause Workspace"}
-        description={workspacePaused ? "This will restore access to the Radia Corp workspace for all members." : "This will temporarily disable access to the Radia Corp workspace for all members. You can resume it at any time."}
+        description={workspacePaused ? `This will restore access to the ${workspaceName} workspace for all members.` : `This will temporarily disable access to the ${workspaceName} workspace for all members. You can resume it at any time.`}
         confirmLabel={workspacePaused ? "Resume" : "Pause"}
         variant={workspacePaused ? "default" : "danger"}
       />
@@ -249,7 +351,7 @@ export function AdminContent() {
         onClose={() => setShowDeleteWorkspace(false)}
         onConfirm={handleDeleteWorkspace}
         title="Delete Workspace"
-        description="Are you sure you want to permanently delete Radia Corp? All members, tasks, SOPs, courses, and integrations will be removed. This cannot be undone."
+        description={`Are you sure you want to permanently delete ${workspaceName}? All members, tasks, SOPs, courses, and integrations will be removed. This cannot be undone.`}
         confirmLabel="Delete Workspace"
         variant="danger"
       />
