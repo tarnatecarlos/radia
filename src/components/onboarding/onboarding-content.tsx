@@ -129,6 +129,22 @@ export function OnboardingContent() {
     );
   }
 
+  if (courses.length === 0) {
+    return (
+      <div className="mx-auto max-w-4xl space-y-6">
+        <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-slate-300 bg-slate-50/50 px-6 py-16 text-center dark:border-slate-700 dark:bg-slate-900/30">
+          <span className="flex h-14 w-14 items-center justify-center rounded-2xl bg-slate-100 dark:bg-slate-800">
+            <GraduationCap className="h-7 w-7 text-slate-400 dark:text-slate-500" />
+          </span>
+          <h3 className="mt-5 text-base font-semibold text-slate-900 dark:text-slate-100">No onboarding courses yet</h3>
+          <p className="mt-2 max-w-sm text-sm leading-relaxed text-slate-500 dark:text-slate-400">
+            Your workspace admin hasn&apos;t created any onboarding courses yet. Check back later or ask your admin to set up the training program.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="mx-auto max-w-4xl space-y-6">
       {/* Progress banner */}

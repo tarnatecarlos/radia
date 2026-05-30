@@ -43,6 +43,7 @@ export interface Profile {
   title?: string;
   manager_id?: string | null;
   onboarding_completed: boolean;
+  setup_completed: boolean;
   started_date: string;
   created_at: string;
   avatar_url?: string;

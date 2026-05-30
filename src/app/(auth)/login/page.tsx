@@ -55,7 +55,7 @@ export default function LoginPage() {
       }
 
       toast("Welcome back!");
-      router.push("/dashboard");
+      router.push("/setup");
     } catch {
       toast("Something went wrong. Please try again.", "error");
     } finally {

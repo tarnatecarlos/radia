@@ -68,7 +68,7 @@ export default function SignupPage() {
       }
 
       toast("Account created! Redirecting...");
-      router.push("/dashboard");
+      router.push("/setup");
     } catch {
       toast("Something went wrong. Please try again.", "error");
     } finally {

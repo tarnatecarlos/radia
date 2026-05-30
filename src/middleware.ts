@@ -11,8 +11,8 @@ export async function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  // Only protect /dashboard routes
-  if (!pathname.startsWith("/dashboard")) {
+  // Only protect /dashboard and /setup routes
+  if (!pathname.startsWith("/dashboard") && !pathname.startsWith("/setup")) {
     return NextResponse.next();
   }
 
@@ -21,7 +21,7 @@ export async function middleware(request: NextRequest) {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
-  // If Supabase is not configured, allow access (dev mode with mock data)
+  // If Supabase is not configured, allow access (dev mode)
   if (!supabaseUrl || !supabaseKey) {
     return response;
   }
@@ -51,9 +51,22 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(loginUrl);
   }
 
+  // Check setup_completed for dashboard routes
+  if (pathname.startsWith("/dashboard")) {
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("setup_completed")
+      .eq("auth_user_id", user.id)
+      .single();
+
+    if (profile && !profile.setup_completed) {
+      return NextResponse.redirect(new URL("/setup", request.url));
+    }
+  }
+
   return response;
 }
 
 export const config = {
-  matcher: ["/dashboard/:path*"],
+  matcher: ["/dashboard/:path*", "/setup"],
 };

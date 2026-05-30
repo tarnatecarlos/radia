@@ -162,6 +162,26 @@ export function IntegrationsContent() {
     );
   }
 
+  if (integrationStates.length === 0) {
+    return (
+      <div className="space-y-5">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight text-slate-900 dark:text-slate-100">Integrations</h1>
+          <p className="mt-1 text-sm text-slate-400 dark:text-slate-500">No integrations set up yet</p>
+        </div>
+        <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-slate-300 bg-slate-50/50 px-6 py-16 text-center dark:border-slate-700 dark:bg-slate-900/30">
+          <span className="flex h-14 w-14 items-center justify-center rounded-2xl bg-slate-100 dark:bg-slate-800">
+            <Zap className="h-7 w-7 text-slate-400 dark:text-slate-500" />
+          </span>
+          <h3 className="mt-5 text-base font-semibold text-slate-900 dark:text-slate-100">No integrations yet</h3>
+          <p className="mt-2 max-w-sm text-sm leading-relaxed text-slate-500 dark:text-slate-400">
+            Connect your favorite tools like Slack, GitHub, and Gmail to streamline your workflows. Contact your workspace admin to set up integrations.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-5">
       <div>

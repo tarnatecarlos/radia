@@ -360,6 +360,26 @@ export function OrgChartContent() {
     );
   }
 
+  if (profilesList.length <= 1) {
+    return (
+      <div className="space-y-4">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-slate-100">Organization Chart</h1>
+          <p className="mt-1 text-sm text-slate-400 dark:text-slate-500">{profilesList.length} employee in the organization</p>
+        </div>
+        <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-slate-300 bg-slate-50/50 px-6 py-16 text-center dark:border-slate-700 dark:bg-slate-900/30">
+          <span className="flex h-14 w-14 items-center justify-center rounded-2xl bg-slate-100 dark:bg-slate-800">
+            <User className="h-7 w-7 text-slate-400 dark:text-slate-500" />
+          </span>
+          <h3 className="mt-5 text-base font-semibold text-slate-900 dark:text-slate-100">Just you for now</h3>
+          <p className="mt-2 max-w-sm text-sm leading-relaxed text-slate-500 dark:text-slate-400">
+            Your org chart will come to life once you add team members. Head to the Dashboard to invite employees to your workspace.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-4">
       <div>

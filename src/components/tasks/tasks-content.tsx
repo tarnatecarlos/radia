@@ -289,6 +289,32 @@ export function TasksContent() {
     );
   }
 
+  // Empty state
+  if (taskList.length === 0) {
+    return (
+      <div className="flex h-full flex-col gap-5">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <h1 className="text-3xl font-bold tracking-tight text-slate-900 dark:text-slate-100">Tasks</h1>
+          <button onClick={() => setShowCreate(true)} className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-indigo-700">
+            <Plus className="h-4 w-4" />Create Task
+          </button>
+        </div>
+        <div className="flex flex-1 flex-col items-center justify-center rounded-xl border border-dashed border-slate-300 bg-slate-50/50 px-6 py-16 text-center dark:border-slate-700 dark:bg-slate-900/30">
+          <span className="flex h-14 w-14 items-center justify-center rounded-2xl bg-slate-100 dark:bg-slate-800">
+            <LayoutGrid className="h-7 w-7 text-slate-400 dark:text-slate-500" />
+          </span>
+          <h3 className="mt-5 text-base font-semibold text-slate-900 dark:text-slate-100">No tasks yet</h3>
+          <p className="mt-2 max-w-sm text-sm leading-relaxed text-slate-500 dark:text-slate-400">
+            Create your first task to start tracking work across your team. Tasks can be organized by status, priority, and assignee.
+          </p>
+          <button onClick={() => setShowCreate(true)} className="mt-6 inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-5 py-2.5 text-sm font-medium text-white transition hover:bg-indigo-700">
+            <Plus className="h-4 w-4" />Create Your First Task
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   const grouped = columns.reduce((acc, col) => {
     acc[col.key] = taskList.filter((t) => t.status === col.key);
     return acc;
