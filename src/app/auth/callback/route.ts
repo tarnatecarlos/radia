@@ -2,10 +2,15 @@ import { NextResponse } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 
+function getSiteUrl(request: Request): string {
+  return process.env.NEXT_PUBLIC_SITE_URL ?? new URL(request.url).origin;
+}
+
 export async function GET(request: Request) {
-  const { searchParams, origin } = new URL(request.url);
+  const { searchParams } = new URL(request.url);
   const code = searchParams.get("code");
   const next = searchParams.get("next") ?? "/setup";
+  const siteUrl = getSiteUrl(request);
 
   if (code) {
     const cookieStore = await cookies();
@@ -28,10 +33,9 @@ export async function GET(request: Request) {
 
     const { error } = await supabase.auth.exchangeCodeForSession(code);
     if (!error) {
-      return NextResponse.redirect(new URL(next, origin));
+      return NextResponse.redirect(new URL(next, siteUrl));
     }
   }
 
-  // Something went wrong — redirect to login with error
-  return NextResponse.redirect(new URL("/login?error=auth_callback_failed", origin));
+  return NextResponse.redirect(new URL("/login?error=auth_callback_failed", siteUrl));
 }

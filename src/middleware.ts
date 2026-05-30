@@ -3,6 +3,14 @@ import { createServerClient } from "@supabase/ssr";
 
 const PUBLIC_PATHS = ["/", "/login", "/signup", "/auth/callback", "/auth/confirm"];
 
+function getRedirectUrl(pathname: string, request: NextRequest): URL {
+  const siteUrl = process.env.NEXT_PUBLIC_SITE_URL;
+  if (siteUrl) {
+    return new URL(pathname, siteUrl);
+  }
+  return new URL(pathname, request.url);
+}
+
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
@@ -46,7 +54,7 @@ export async function middleware(request: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser();
 
   if (!user) {
-    const loginUrl = new URL("/login", request.url);
+    const loginUrl = getRedirectUrl("/login", request);
     loginUrl.searchParams.set("redirect", pathname);
     return NextResponse.redirect(loginUrl);
   }
@@ -60,7 +68,7 @@ export async function middleware(request: NextRequest) {
       .single();
 
     if (profile && !profile.setup_completed) {
-      return NextResponse.redirect(new URL("/setup", request.url));
+      return NextResponse.redirect(getRedirectUrl("/setup", request));
     }
   }
 
