@@ -48,7 +48,11 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   return (
     <ToastContext.Provider value={{ toast: addToast }}>
       {children}
-      <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-2">
+      <div
+        className="pointer-events-none fixed bottom-4 right-4 z-50 flex max-w-[calc(100vw-2rem)] flex-col gap-2 sm:max-w-sm"
+        aria-live="polite"
+        aria-relevant="additions removals"
+      >
         <AnimatePresence>
           {toasts.map((t) => {
             const Icon = icons[t.type];
@@ -58,12 +62,18 @@ export function ToastProvider({ children }: { children: ReactNode }) {
                 initial={{ opacity: 0, y: 20, scale: 0.95 }}
                 animate={{ opacity: 1, y: 0, scale: 1 }}
                 exit={{ opacity: 0, y: 10, scale: 0.95 }}
-                transition={{ duration: 0.2 }}
-                className={`flex items-center gap-2 rounded-lg border px-4 py-3 shadow-lg ${colors[t.type]}`}
+                transition={{ duration: 0.18, ease: [0.25, 0.46, 0.45, 0.94] }}
+                role={t.type === "error" ? "alert" : "status"}
+                className={`pointer-events-auto flex w-full items-start gap-2 rounded-lg border px-4 py-3 shadow-lg ${colors[t.type]}`}
               >
-                <Icon className="h-4 w-4 flex-shrink-0" />
-                <p className="text-sm font-medium">{t.message}</p>
-                <button onClick={() => removeToast(t.id)} className="ml-2 rounded p-0.5 opacity-60 hover:opacity-100">
+                <Icon className="mt-0.5 h-4 w-4 flex-shrink-0" />
+                <p className="min-w-0 flex-1 text-sm font-medium">{t.message}</p>
+                <button
+                  type="button"
+                  onClick={() => removeToast(t.id)}
+                  aria-label="Dismiss notification"
+                  className="ml-2 rounded p-0.5 opacity-60 transition-opacity hover:opacity-100 focus-visible:opacity-100"
+                >
                   <X className="h-3.5 w-3.5" />
                 </button>
               </motion.div>

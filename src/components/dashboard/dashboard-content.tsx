@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useSyncExternalStore } from "react";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -27,6 +27,19 @@ function formatDate(date: Date) {
     month: "long",
     day: "numeric",
   });
+}
+
+function subscribeToDateChanges(onStoreChange: () => void) {
+  const intervalId = window.setInterval(onStoreChange, 60 * 60 * 1000);
+  return () => window.clearInterval(intervalId);
+}
+
+function getCurrentDateSnapshot() {
+  return formatDate(new Date());
+}
+
+function getServerDateSnapshot() {
+  return "Today";
 }
 
 function timeAgo(dateString: string) {
@@ -107,7 +120,11 @@ export function DashboardContent() {
   const router = useRouter();
   const { toast } = useToast();
   const { profile, preferences, loading: userLoading } = useUser();
-  const currentDate = formatDate(new Date());
+  const currentDate = useSyncExternalStore(
+    subscribeToDateChanges,
+    getCurrentDateSnapshot,
+    getServerDateSnapshot,
+  );
 
   const [taskList, setTaskList] = useState<Task[]>([]);
   const [profilesList, setProfilesList] = useState<Profile[]>([]);

@@ -8,6 +8,7 @@ import {
   GripVertical,
   LayoutGrid,
   List,
+  Loader2,
   MessageSquare,
   Plus,
   Table,
@@ -73,10 +74,46 @@ function StatusPill({ status }: { status: TaskStatus }) {
   );
 }
 
+function TasksSkeleton() {
+  return (
+    <div className="flex h-full flex-col gap-5" aria-label="Loading tasks">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="radia-skeleton h-9 w-28 rounded-lg" />
+        <div className="radia-skeleton h-10 w-32 rounded-lg" />
+      </div>
+      <div className="grid flex-1 auto-rows-min grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+        {columns.map((column) => (
+          <div key={column.key} className="rounded-xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-900/50">
+            <div className="mb-3 flex items-center gap-2 px-1 py-1">
+              <span className={`h-2.5 w-2.5 rounded-full ${column.dotColor}`} />
+              <div className="radia-skeleton h-4 w-24 rounded" />
+            </div>
+            <div className="space-y-3">
+              {[0, 1, 2].map((item) => (
+                <div key={item} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-900">
+                  <div className="flex items-center gap-2">
+                    <div className="radia-skeleton h-7 w-7 rounded-full" />
+                    <div className="min-w-0 flex-1 space-y-2">
+                      <div className="radia-skeleton h-3 w-28 rounded" />
+                      <div className="radia-skeleton h-2.5 w-16 rounded" />
+                    </div>
+                  </div>
+                  <div className="radia-skeleton mt-4 h-4 w-11/12 rounded" />
+                  <div className="radia-skeleton mt-2 h-3 w-2/3 rounded" />
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function TaskCard({
-  task, isDragging, onDragStart, onDragEnd, onDelete,
+  task, isDragging, isDeleting, onDragStart, onDragEnd, onDelete,
 }: {
-  task: Task; isDragging: boolean;
+  task: Task; isDragging: boolean; isDeleting: boolean;
   onDragStart: (e: DragEvent<HTMLDivElement>, id: string) => void;
   onDragEnd: () => void; onDelete: (id: string) => void;
 }) {
@@ -106,10 +143,13 @@ function TaskCard({
           <p className="text-[11px] text-slate-400">{formatShortDate(task.created_at)}</p>
         </div>
         <button
+          type="button"
+          aria-label={`Delete ${task.title}`}
+          disabled={isDeleting}
           onClick={(e) => { e.stopPropagation(); onDelete(task.id); }}
-          className="rounded p-1 text-slate-300 opacity-0 transition hover:bg-rose-50 hover:text-rose-500 group-hover:opacity-100 dark:hover:bg-rose-500/10"
+          className="inline-flex h-8 w-8 items-center justify-center rounded-md text-slate-400 opacity-0 transition hover:bg-rose-50 hover:text-rose-500 focus-visible:opacity-100 disabled:cursor-not-allowed disabled:opacity-60 group-hover:opacity-100 dark:hover:bg-rose-500/10"
         >
-          <Trash2 className="h-3.5 w-3.5" />
+          {isDeleting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
         </button>
         <GripVertical className="h-4 w-4 text-slate-400" />
       </div>
@@ -151,6 +191,8 @@ export function TasksContent() {
   const [newPriority, setNewPriority] = useState<TaskPriority>("MEDIUM");
   const [newAssignee, setNewAssignee] = useState("");
   const [newStatus, setNewStatus] = useState<TaskStatus>("TODO");
+  const [submitting, setSubmitting] = useState(false);
+  const [deletingTaskId, setDeletingTaskId] = useState<string | null>(null);
 
   // Fetch tasks and profiles on mount / when profile is available
   useEffect(() => {
@@ -233,8 +275,11 @@ export function TasksContent() {
   }, [toast]);
 
   const handleDelete = useCallback(async (id: string) => {
+    if (deletingTaskId) return;
+
     // Optimistic update
     const previousTasks = taskList;
+    setDeletingTaskId(id);
     setTaskList((prev) => prev.filter((t) => t.id !== id));
     toast("Task deleted");
 
@@ -243,13 +288,17 @@ export function TasksContent() {
     } catch (error) {
       toast(getErrorMessage(error, "Failed to delete task"), "error");
       setTaskList(previousTasks);
+    } finally {
+      setDeletingTaskId(null);
     }
-  }, [toast, taskList]);
+  }, [deletingTaskId, toast, taskList]);
 
   async function handleCreate() {
     if (!newTitle.trim()) { toast("Task title is required", "error"); return; }
     if (!profile) return;
+    if (submitting) return;
 
+    setSubmitting(true);
     try {
       const data = await api<Task>("/tasks", {
         method: "POST",
@@ -267,29 +316,67 @@ export function TasksContent() {
       setShowCreate(false); setNewTitle(""); setNewDesc(""); setNewPriority("MEDIUM"); setNewAssignee(""); setNewStatus("TODO");
     } catch (error) {
       toast(getErrorMessage(error, "Failed to create task"), "error");
+    } finally {
+      setSubmitting(false);
     }
   }
 
   const createTaskModal = (
     <AnimatePresence>
       {showCreate && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 bg-black/50" onClick={() => setShowCreate(false)} />
-          <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} transition={{ duration: 0.15 }} className="relative w-full max-w-lg rounded-xl border border-slate-200 bg-white p-6 shadow-xl dark:border-slate-700 dark:bg-slate-900">
+        <div className="fixed inset-0 z-50 flex items-center justify-center px-4 py-4">
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="absolute inset-0 bg-slate-950/55"
+            onClick={() => {
+              if (!submitting) setShowCreate(false);
+            }}
+          />
+          <motion.form
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="create-task-title"
+            initial={{ opacity: 0, scale: 0.95, y: 8 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.95, y: 8 }}
+            transition={{ duration: 0.16, ease: [0.25, 0.46, 0.45, 0.94] }}
+            onSubmit={(event) => {
+              event.preventDefault();
+              handleCreate();
+            }}
+            className="relative max-h-[calc(100dvh-2rem)] w-full max-w-lg overflow-y-auto rounded-xl border border-slate-200 bg-white p-5 shadow-xl sm:p-6 dark:border-slate-700 dark:bg-slate-900"
+          >
             <div className="flex items-center justify-between">
-              <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100">Create Task</h3>
-              <button onClick={() => setShowCreate(false)} className="rounded-md p-1 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"><X className="h-5 w-5" /></button>
+              <h3 id="create-task-title" className="text-lg font-semibold text-slate-900 dark:text-slate-100">Create Task</h3>
+              <button
+                type="button"
+                onClick={() => setShowCreate(false)}
+                disabled={submitting}
+                aria-label="Close create task dialog"
+                className="inline-flex h-9 w-9 items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-slate-800"
+              >
+                <X className="h-5 w-5" />
+              </button>
             </div>
             <div className="mt-4 space-y-3">
               <label className="block">
                 <span className="mb-1 block text-sm font-medium text-slate-600 dark:text-slate-300">Title *</span>
-                <input value={newTitle} onChange={(e) => setNewTitle(e.target.value)} placeholder="Task title..." className="radia-input w-full px-3 py-2.5 text-sm text-slate-900 dark:text-slate-100" />
+                <input
+                  autoFocus
+                  required
+                  value={newTitle}
+                  onChange={(e) => setNewTitle(e.target.value)}
+                  placeholder="Task title..."
+                  className="radia-input w-full px-3 py-2.5 text-sm text-slate-900 dark:text-slate-100"
+                />
               </label>
               <label className="block">
                 <span className="mb-1 block text-sm font-medium text-slate-600 dark:text-slate-300">Description</span>
                 <textarea value={newDesc} onChange={(e) => setNewDesc(e.target.value)} rows={3} placeholder="Optional description..." className="radia-input w-full resize-none px-3 py-2.5 text-sm text-slate-900 dark:text-slate-100" />
               </label>
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                 <label className="block">
                   <span className="mb-1 block text-sm font-medium text-slate-600 dark:text-slate-300">Status</span>
                   <select value={newStatus} onChange={(e) => setNewStatus(e.target.value as TaskStatus)} className="radia-input w-full px-3 py-2.5 text-sm text-slate-900 dark:text-slate-100">
@@ -314,12 +401,26 @@ export function TasksContent() {
                   </select>
                 </label>
               </div>
-              <div className="flex justify-end gap-2 pt-2">
-                <button onClick={() => setShowCreate(false)} className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800">Cancel</button>
-                <button onClick={handleCreate} className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700">Create Task</button>
+              <div className="flex flex-col-reverse gap-2 pt-2 sm:flex-row sm:justify-end">
+                <button
+                  type="button"
+                  onClick={() => setShowCreate(false)}
+                  disabled={submitting}
+                  className="min-h-10 rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={submitting || !newTitle.trim()}
+                  className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {submitting && <Loader2 className="h-4 w-4 animate-spin" />}
+                  {submitting ? "Creating..." : "Create Task"}
+                </button>
               </div>
             </div>
-          </motion.div>
+          </motion.form>
         </div>
       )}
     </AnimatePresence>
@@ -335,14 +436,7 @@ export function TasksContent() {
 
   // Loading state
   if (userLoading || dataLoading) {
-    return (
-      <div className="flex h-full items-center justify-center">
-        <div className="flex flex-col items-center gap-3">
-          <div className="h-8 w-8 animate-spin rounded-full border-4 border-slate-200 border-t-indigo-600" />
-          <p className="text-sm text-slate-500 dark:text-slate-400">Loading tasks...</p>
-        </div>
-      </div>
-    );
+    return <TasksSkeleton />;
   }
 
   // Empty state
@@ -352,7 +446,7 @@ export function TasksContent() {
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <h1 className="text-3xl font-bold tracking-tight text-slate-900 dark:text-slate-100">Tasks</h1>
           {canCreate && (
-            <button onClick={() => setShowCreate(true)} className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-indigo-700">
+            <button type="button" onClick={() => setShowCreate(true)} className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-indigo-700">
               <Plus className="h-4 w-4" />Create Task
             </button>
           )}
@@ -368,7 +462,7 @@ export function TasksContent() {
               : "No tasks have been assigned to you yet."}
           </p>
           {canCreate && (
-            <button onClick={() => setShowCreate(true)} className="mt-6 inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-5 py-2.5 text-sm font-medium text-white transition hover:bg-indigo-700">
+            <button type="button" onClick={() => setShowCreate(true)} className="mt-6 inline-flex min-h-10 items-center justify-center gap-2 rounded-lg bg-indigo-600 px-5 py-2.5 text-sm font-medium text-white transition hover:bg-indigo-700">
               <Plus className="h-4 w-4" />Create Your First Task
             </button>
           )}
@@ -388,7 +482,7 @@ export function TasksContent() {
       <motion.div initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.35 }} className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <h1 className="text-3xl font-bold tracking-tight text-slate-900 dark:text-slate-100">Tasks</h1>
         {canCreate && (
-          <button onClick={() => setShowCreate(true)} className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-indigo-700">
+          <button type="button" onClick={() => setShowCreate(true)} className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-indigo-700">
             <Plus className="h-4 w-4" />Create Task
           </button>
         )}
@@ -430,7 +524,15 @@ export function TasksContent() {
                 </div>
                 <div className="flex flex-col gap-3 p-3">
                   {grouped[column.key].map((task) => (
-                    <TaskCard key={task.id} task={task} isDragging={draggingId === task.id} onDragStart={handleDragStart} onDragEnd={handleDragEnd} onDelete={handleDelete} />
+                    <TaskCard
+                      key={task.id}
+                      task={task}
+                      isDragging={draggingId === task.id}
+                      isDeleting={deletingTaskId === task.id}
+                      onDragStart={handleDragStart}
+                      onDragEnd={handleDragEnd}
+                      onDelete={handleDelete}
+                    />
                   ))}
                 </div>
               </motion.div>
@@ -453,8 +555,14 @@ export function TasksContent() {
                     {getInitials(task.assignee.first_name, task.assignee.last_name)}
                   </span>
                 )}
-                <button onClick={() => handleDelete(task.id)} className="rounded p-1 text-slate-300 opacity-0 transition hover:bg-rose-50 hover:text-rose-500 group-hover:opacity-100 dark:hover:bg-rose-500/10">
-                  <Trash2 className="h-3.5 w-3.5" />
+                <button
+                  type="button"
+                  onClick={() => handleDelete(task.id)}
+                  aria-label={`Delete ${task.title}`}
+                  disabled={deletingTaskId === task.id}
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-md text-slate-400 opacity-0 transition hover:bg-rose-50 hover:text-rose-500 focus-visible:opacity-100 disabled:cursor-not-allowed disabled:opacity-60 group-hover:opacity-100 dark:hover:bg-rose-500/10"
+                >
+                  {deletingTaskId === task.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
                 </button>
               </motion.div>
             ))}
@@ -497,8 +605,14 @@ export function TasksContent() {
                     </td>
                     <td className="px-4 py-3 text-slate-500 dark:text-slate-400">{task.due_date ? formatShortDate(task.due_date) : "-"}</td>
                     <td className="px-4 py-3">
-                      <button onClick={() => handleDelete(task.id)} className="rounded p-1 text-slate-300 opacity-0 transition hover:bg-rose-50 hover:text-rose-500 group-hover:opacity-100 dark:hover:bg-rose-500/10">
-                        <Trash2 className="h-3.5 w-3.5" />
+                      <button
+                        type="button"
+                        onClick={() => handleDelete(task.id)}
+                        aria-label={`Delete ${task.title}`}
+                        disabled={deletingTaskId === task.id}
+                        className="inline-flex h-8 w-8 items-center justify-center rounded-md text-slate-400 opacity-0 transition hover:bg-rose-50 hover:text-rose-500 focus-visible:opacity-100 disabled:cursor-not-allowed disabled:opacity-60 group-hover:opacity-100 dark:hover:bg-rose-500/10"
+                      >
+                        {deletingTaskId === task.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
                       </button>
                     </td>
                   </motion.tr>

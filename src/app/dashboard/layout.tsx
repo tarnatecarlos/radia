@@ -1,4 +1,4 @@
-import { Sidebar } from "@/components/layout/sidebar";
+import { MobileNav, Sidebar } from "@/components/layout/sidebar";
 import { UserProvider } from "@/lib/user-context";
 
 export default function DashboardLayout({
@@ -8,14 +8,17 @@ export default function DashboardLayout({
 }) {
   return (
     <UserProvider>
-      <div className="flex h-screen overflow-hidden bg-slate-50 dark:bg-slate-950">
-        <aside className="w-60 flex-shrink-0">
+      <div className="flex min-h-[100dvh] bg-slate-50 dark:bg-slate-950">
+        <aside className="hidden w-60 flex-shrink-0 md:block">
           <Sidebar />
         </aside>
 
-        <main className="flex-1 overflow-y-auto px-6 py-5 lg:px-8">
-          {children}
-        </main>
+        <div className="flex min-w-0 flex-1 flex-col">
+          <MobileNav />
+          <main id="main-content" className="min-w-0 flex-1 overflow-y-auto px-4 py-4 sm:px-6 sm:py-5 lg:px-8">
+            {children}
+          </main>
+        </div>
       </div>
     </UserProvider>
   );
