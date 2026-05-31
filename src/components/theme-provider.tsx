@@ -29,6 +29,10 @@ function resolveStoredTheme(): Theme {
   return stored === "light" || stored === "dark" ? stored : "light";
 }
 
+function getServerThemeSnapshot(): Theme {
+  return "light";
+}
+
 function subscribeToThemeChange(onStoreChange: () => void) {
   if (typeof window === "undefined") {
     return () => {};
@@ -50,10 +54,10 @@ function subscribeToThemeChange(onStoreChange: () => void) {
 }
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
-  const theme = useSyncExternalStore(
+  const theme = useSyncExternalStore<Theme>(
     subscribeToThemeChange,
     resolveStoredTheme,
-    () => "light"
+    getServerThemeSnapshot
   );
 
   function applyTheme(t: Theme) {

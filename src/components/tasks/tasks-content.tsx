@@ -270,6 +270,61 @@ export function TasksContent() {
     }
   }
 
+  const createTaskModal = (
+    <AnimatePresence>
+      {showCreate && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 bg-black/50" onClick={() => setShowCreate(false)} />
+          <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} transition={{ duration: 0.15 }} className="relative w-full max-w-lg rounded-xl border border-slate-200 bg-white p-6 shadow-xl dark:border-slate-700 dark:bg-slate-900">
+            <div className="flex items-center justify-between">
+              <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100">Create Task</h3>
+              <button onClick={() => setShowCreate(false)} className="rounded-md p-1 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"><X className="h-5 w-5" /></button>
+            </div>
+            <div className="mt-4 space-y-3">
+              <label className="block">
+                <span className="mb-1 block text-sm font-medium text-slate-600 dark:text-slate-300">Title *</span>
+                <input value={newTitle} onChange={(e) => setNewTitle(e.target.value)} placeholder="Task title..." className="radia-input w-full px-3 py-2.5 text-sm text-slate-900 dark:text-slate-100" />
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-sm font-medium text-slate-600 dark:text-slate-300">Description</span>
+                <textarea value={newDesc} onChange={(e) => setNewDesc(e.target.value)} rows={3} placeholder="Optional description..." className="radia-input w-full resize-none px-3 py-2.5 text-sm text-slate-900 dark:text-slate-100" />
+              </label>
+              <div className="grid grid-cols-3 gap-3">
+                <label className="block">
+                  <span className="mb-1 block text-sm font-medium text-slate-600 dark:text-slate-300">Status</span>
+                  <select value={newStatus} onChange={(e) => setNewStatus(e.target.value as TaskStatus)} className="radia-input w-full px-3 py-2.5 text-sm text-slate-900 dark:text-slate-100">
+                    <option value="TODO">To Do</option>
+                    <option value="IN_PROGRESS">In Progress</option>
+                    <option value="REVIEW">Review</option>
+                  </select>
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-sm font-medium text-slate-600 dark:text-slate-300">Priority</span>
+                  <select value={newPriority} onChange={(e) => setNewPriority(e.target.value as TaskPriority)} className="radia-input w-full px-3 py-2.5 text-sm text-slate-900 dark:text-slate-100">
+                    <option value="LOW">Low</option>
+                    <option value="MEDIUM">Medium</option>
+                    <option value="HIGH">High</option>
+                  </select>
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-sm font-medium text-slate-600 dark:text-slate-300">Assignee</span>
+                  <select value={newAssignee} onChange={(e) => setNewAssignee(e.target.value)} className="radia-input w-full px-3 py-2.5 text-sm text-slate-900 dark:text-slate-100">
+                    <option value="">Unassigned</option>
+                    {profilesList.map((p) => (<option key={p.id} value={p.id}>{p.first_name} {p.last_name}</option>))}
+                  </select>
+                </label>
+              </div>
+              <div className="flex justify-end gap-2 pt-2">
+                <button onClick={() => setShowCreate(false)} className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800">Cancel</button>
+                <button onClick={handleCreate} className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700">Create Task</button>
+              </div>
+            </div>
+          </motion.div>
+        </div>
+      )}
+    </AnimatePresence>
+  );
+
   if (!userLoading && !profile) {
     return (
       <div className="flex h-full items-center justify-center">
@@ -318,6 +373,7 @@ export function TasksContent() {
             </button>
           )}
         </div>
+        {createTaskModal}
       </div>
     );
   }
@@ -453,59 +509,7 @@ export function TasksContent() {
         )}
       </AnimatePresence>
 
-      {/* Create Task Modal */}
-      <AnimatePresence>
-        {showCreate && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center">
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 bg-black/50" onClick={() => setShowCreate(false)} />
-            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} transition={{ duration: 0.15 }} className="relative w-full max-w-lg rounded-xl border border-slate-200 bg-white p-6 shadow-xl dark:border-slate-700 dark:bg-slate-900">
-              <div className="flex items-center justify-between">
-                <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100">Create Task</h3>
-                <button onClick={() => setShowCreate(false)} className="rounded-md p-1 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"><X className="h-5 w-5" /></button>
-              </div>
-              <div className="mt-4 space-y-3">
-                <label className="block">
-                  <span className="mb-1 block text-sm font-medium text-slate-600 dark:text-slate-300">Title *</span>
-                  <input value={newTitle} onChange={(e) => setNewTitle(e.target.value)} placeholder="Task title..." className="radia-input w-full px-3 py-2.5 text-sm text-slate-900 dark:text-slate-100" />
-                </label>
-                <label className="block">
-                  <span className="mb-1 block text-sm font-medium text-slate-600 dark:text-slate-300">Description</span>
-                  <textarea value={newDesc} onChange={(e) => setNewDesc(e.target.value)} rows={3} placeholder="Optional description..." className="radia-input w-full resize-none px-3 py-2.5 text-sm text-slate-900 dark:text-slate-100" />
-                </label>
-                <div className="grid grid-cols-3 gap-3">
-                  <label className="block">
-                    <span className="mb-1 block text-sm font-medium text-slate-600 dark:text-slate-300">Status</span>
-                    <select value={newStatus} onChange={(e) => setNewStatus(e.target.value as TaskStatus)} className="radia-input w-full px-3 py-2.5 text-sm text-slate-900 dark:text-slate-100">
-                      <option value="TODO">To Do</option>
-                      <option value="IN_PROGRESS">In Progress</option>
-                      <option value="REVIEW">Review</option>
-                    </select>
-                  </label>
-                  <label className="block">
-                    <span className="mb-1 block text-sm font-medium text-slate-600 dark:text-slate-300">Priority</span>
-                    <select value={newPriority} onChange={(e) => setNewPriority(e.target.value as TaskPriority)} className="radia-input w-full px-3 py-2.5 text-sm text-slate-900 dark:text-slate-100">
-                      <option value="LOW">Low</option>
-                      <option value="MEDIUM">Medium</option>
-                      <option value="HIGH">High</option>
-                    </select>
-                  </label>
-                  <label className="block">
-                    <span className="mb-1 block text-sm font-medium text-slate-600 dark:text-slate-300">Assignee</span>
-                    <select value={newAssignee} onChange={(e) => setNewAssignee(e.target.value)} className="radia-input w-full px-3 py-2.5 text-sm text-slate-900 dark:text-slate-100">
-                      <option value="">Unassigned</option>
-                      {profilesList.map((p) => (<option key={p.id} value={p.id}>{p.first_name} {p.last_name}</option>))}
-                    </select>
-                  </label>
-                </div>
-                <div className="flex justify-end gap-2 pt-2">
-                  <button onClick={() => setShowCreate(false)} className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800">Cancel</button>
-                  <button onClick={handleCreate} className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700">Create Task</button>
-                </div>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
+      {createTaskModal}
     </div>
   );
 }
