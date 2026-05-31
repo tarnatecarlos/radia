@@ -4,7 +4,7 @@ import {
   createContext,
   useContext,
   useEffect,
-  useState,
+  useSyncExternalStore,
   type ReactNode,
 } from "react";
 
@@ -18,6 +18,7 @@ interface ThemeContextValue {
 const ThemeContext = createContext<ThemeContextValue | undefined>(undefined);
 
 const STORAGE_KEY = "radia-theme";
+const THEME_EVENT = "radia-theme-change";
 
 function resolveStoredTheme(): Theme {
   if (typeof window === "undefined") {
@@ -28,8 +29,32 @@ function resolveStoredTheme(): Theme {
   return stored === "light" || stored === "dark" ? stored : "light";
 }
 
+function subscribeToThemeChange(onStoreChange: () => void) {
+  if (typeof window === "undefined") {
+    return () => {};
+  }
+
+  const handleStorage = (event: StorageEvent) => {
+    if (event.key === STORAGE_KEY) {
+      onStoreChange();
+    }
+  };
+
+  window.addEventListener("storage", handleStorage);
+  window.addEventListener(THEME_EVENT, onStoreChange);
+
+  return () => {
+    window.removeEventListener("storage", handleStorage);
+    window.removeEventListener(THEME_EVENT, onStoreChange);
+  };
+}
+
 export function ThemeProvider({ children }: { children: ReactNode }) {
-  const [theme, setTheme] = useState<Theme>(resolveStoredTheme);
+  const theme = useSyncExternalStore(
+    subscribeToThemeChange,
+    resolveStoredTheme,
+    () => "light"
+  );
 
   function applyTheme(t: Theme) {
     const root = document.documentElement;
@@ -41,13 +66,16 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   }
 
   function toggleTheme() {
+    if (typeof window === "undefined") {
+      return;
+    }
     const next: Theme = theme === "dark" ? "light" : "dark";
-    setTheme(next);
+    window.localStorage.setItem(STORAGE_KEY, next);
+    window.dispatchEvent(new Event(THEME_EVENT));
   }
 
   useEffect(() => {
     applyTheme(theme);
-    window.localStorage.setItem(STORAGE_KEY, theme);
   }, [theme]);
 
   return (

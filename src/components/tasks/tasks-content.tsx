@@ -56,6 +56,10 @@ function formatShortDate(dateStr: string) {
   return new Date(dateStr).toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
+function getErrorMessage(error: unknown, fallback: string) {
+  return error instanceof Error && error.message ? error.message : fallback;
+}
+
 function StatusPill({ status }: { status: TaskStatus }) {
   const styles: Record<TaskStatus, string> = {
     TODO: "bg-slate-100 text-slate-600", IN_PROGRESS: "bg-sky-50 text-sky-700",
@@ -152,19 +156,35 @@ export function TasksContent() {
   useEffect(() => {
     if (!profile) return;
 
+    let cancelled = false;
+
     async function fetchData() {
       setDataLoading(true);
-      const [tasks, profiles] = await Promise.all([
-        api<Task[]>("/tasks"),
-        api<Profile[]>("/profiles"),
-      ]);
-      setTaskList(tasks);
-      setProfilesList(profiles);
-      setDataLoading(false);
+      try {
+        const [tasks, profiles] = await Promise.all([
+          api<Task[]>("/tasks"),
+          api<Profile[]>("/profiles"),
+        ]);
+
+        if (cancelled) return;
+        setTaskList(tasks);
+        setProfilesList(profiles);
+      } catch (error) {
+        if (cancelled) return;
+        toast(getErrorMessage(error, "Failed to load tasks"), "error");
+      } finally {
+        if (!cancelled) {
+          setDataLoading(false);
+        }
+      }
     }
 
     fetchData();
-  }, [profile]);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [profile, toast]);
 
   const handleDragStart = useCallback((e: DragEvent<HTMLDivElement>, taskId: string) => {
     e.dataTransfer.setData("text/plain", taskId);
@@ -207,8 +227,8 @@ export function TasksContent() {
 
     try {
       await api("/tasks", { method: "PATCH", body: JSON.stringify({ id: taskId, status: targetStatus }) });
-    } catch {
-      toast("Failed to update task status", "error");
+    } catch (error) {
+      toast(getErrorMessage(error, "Failed to update task status"), "error");
     }
   }, [toast]);
 
@@ -220,8 +240,8 @@ export function TasksContent() {
 
     try {
       await api("/tasks", { method: "DELETE", body: JSON.stringify({ id }) });
-    } catch {
-      toast("Failed to delete task", "error");
+    } catch (error) {
+      toast(getErrorMessage(error, "Failed to delete task"), "error");
       setTaskList(previousTasks);
     }
   }, [toast, taskList]);
@@ -245,9 +265,17 @@ export function TasksContent() {
       setTaskList((prev) => [data, ...prev]);
       toast("Task created successfully");
       setShowCreate(false); setNewTitle(""); setNewDesc(""); setNewPriority("MEDIUM"); setNewAssignee(""); setNewStatus("TODO");
-    } catch {
-      toast("Failed to create task", "error");
+    } catch (error) {
+      toast(getErrorMessage(error, "Failed to create task"), "error");
     }
+  }
+
+  if (!userLoading && !profile) {
+    return (
+      <div className="flex h-full items-center justify-center">
+        <p className="text-sm text-slate-500 dark:text-slate-400">Unable to load your profile. Please sign in again.</p>
+      </div>
+    );
   }
 
   // Loading state
