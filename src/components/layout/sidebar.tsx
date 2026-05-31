@@ -18,7 +18,7 @@ import {
 import { useUser } from "@/lib/user-context";
 import { getRoleBadgeColor, getRoleLabel } from "@/lib/utils/roles";
 import { useTheme } from "@/components/theme-provider";
-import { createClient } from "@/lib/supabase/client";
+import { api } from "@/lib/api";
 
 const navItems = [
   { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
@@ -56,10 +56,9 @@ export function Sidebar() {
 
   async function handleLogout() {
     try {
-      const supabase = createClient();
-      await supabase.auth.signOut();
+      await api("/auth/logout", { method: "POST" });
     } catch {
-      // ignore — might not have Supabase configured
+      // ignore
     }
     router.push("/");
   }

@@ -14,8 +14,8 @@ import {
   Sparkles,
   Users,
 } from "lucide-react";
-import { createClient } from "@/lib/supabase/client";
-import type { Profile, Workspace } from "@/lib/types";
+import { api } from "@/lib/api";
+import type { Profile } from "@/lib/types";
 
 type Step = "welcome" | "choose" | "join" | "create";
 
@@ -27,7 +27,6 @@ interface OrgMatch {
 
 export default function SetupPage() {
   const router = useRouter();
-  const supabase = createClient();
 
   const [step, setStep] = useState<Step>("welcome");
   const [profile, setProfile] = useState<Profile | null>(null);
@@ -44,34 +43,28 @@ export default function SetupPage() {
 
   useEffect(() => {
     async function init() {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) {
+      try {
+        const data = await api<{ profile: Profile | null }>("/auth/me");
+
+        if (!data.profile) {
+          router.push("/login");
+          return;
+        }
+
+        // Already completed setup — go to dashboard
+        if (data.profile.setup_completed) {
+          router.push("/dashboard");
+          return;
+        }
+
+        setProfile(data.profile);
+        setLoading(false);
+      } catch {
         router.push("/login");
-        return;
       }
-
-      const { data: profileData } = await supabase
-        .from("profiles")
-        .select("*")
-        .eq("auth_user_id", user.id)
-        .single();
-
-      if (!profileData) {
-        router.push("/login");
-        return;
-      }
-
-      // Already completed setup — go to dashboard
-      if (profileData.setup_completed) {
-        router.push("/dashboard");
-        return;
-      }
-
-      setProfile(profileData as Profile);
-      setLoading(false);
     }
     init();
-  }, [router, supabase]);
+  }, [router]);
 
   async function searchOrganizations() {
     if (!profile) return;
@@ -80,25 +73,15 @@ export default function SetupPage() {
 
     const domain = profile.email.split("@")[1];
 
-    // Find workspaces that have members with the same email domain
-    // (excluding the user's own auto-created workspace)
-    const { data: profiles } = await supabase
-      .from("profiles")
-      .select("workspace_id, workspaces:workspace_id(id, name, subdomain)")
-      .like("email", `%@${domain}`)
-      .neq("id", profile.id);
-
-    const uniqueOrgs = new Map<string, OrgMatch>();
-    if (profiles) {
-      for (const p of profiles) {
-        const ws = p.workspaces as unknown as Workspace;
-        if (ws && !uniqueOrgs.has(ws.id)) {
-          uniqueOrgs.set(ws.id, { id: ws.id, name: ws.name, subdomain: ws.subdomain });
-        }
-      }
+    try {
+      const orgs = await api<{ id: string; name: string; subdomain: string }[]>(
+        "/workspaces/search?domain=" + domain
+      );
+      setMatchedOrgs(orgs);
+    } catch {
+      setMatchedOrgs([]);
     }
 
-    setMatchedOrgs(Array.from(uniqueOrgs.values()));
     setSearchDone(true);
     setSearching(false);
   }
@@ -107,33 +90,32 @@ export default function SetupPage() {
     if (!profile || !orgName.trim()) return;
     setCreating(true);
 
-    // Update the user's auto-created workspace with the real org name
-    const subdomain = orgName.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
-    const { error: wsError } = await supabase
-      .from("workspaces")
-      .update({ name: orgName.trim(), subdomain: subdomain || `org-${Date.now()}` })
-      .eq("id", profile.workspace_id);
+    try {
+      // Update the user's auto-created workspace with the real org name
+      const subdomain = orgName.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+      await api("/workspaces", {
+        method: "PATCH",
+        body: JSON.stringify({ id: profile.workspace_id, name: orgName.trim(), subdomain: subdomain || `org-${Date.now()}` }),
+      });
 
-    if (wsError) {
+      // Mark setup complete
+      await api("/profiles", {
+        method: "PATCH",
+        body: JSON.stringify({ id: profile.id, setup_completed: true }),
+      });
+
+      router.push("/dashboard");
+    } catch {
       setCreating(false);
-      return;
     }
-
-    // Mark setup complete
-    await supabase
-      .from("profiles")
-      .update({ setup_completed: true })
-      .eq("id", profile.id);
-
-    router.push("/dashboard");
   }
 
   async function handleSkipSetup() {
     if (!profile) return;
-    await supabase
-      .from("profiles")
-      .update({ setup_completed: true })
-      .eq("id", profile.id);
+    await api("/profiles", {
+      method: "PATCH",
+      body: JSON.stringify({ id: profile.id, setup_completed: true }),
+    });
     router.push("/dashboard");
   }
 

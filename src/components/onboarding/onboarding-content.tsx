@@ -2,42 +2,43 @@
 
 import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { ArrowLeft, BookOpen, CheckCircle2, Clock, GraduationCap, Play, X } from "lucide-react";
+import { ArrowLeft, BookOpen, CheckCircle2, Clock, GraduationCap, Minus, Play, Plus, X } from "lucide-react";
 import type { Course, CourseEnrollment } from "@/lib/types";
 import { useToast } from "@/components/ui/toast";
 import { RichContent } from "@/components/ui/rich-content";
 import { useUser } from "@/lib/user-context";
-import { createClient } from "@/lib/supabase/client";
+import { api } from "@/lib/api";
 
 export function OnboardingContent() {
   const { toast } = useToast();
-  const { profile, loading: userLoading } = useUser();
+  const { profile, preferences, loading: userLoading } = useUser();
   const [courses, setCourses] = useState<Course[]>([]);
   const [enrollmentState, setEnrollmentState] = useState<CourseEnrollment[]>([]);
   const [dataLoading, setDataLoading] = useState(true);
   const [activeCourseId, setActiveCourseId] = useState<string | null>(null);
   const [activeLessonIdx, setActiveLessonIdx] = useState(0);
 
+  // Create course
+  const [showCreate, setShowCreate] = useState(false);
+  const [newTitle, setNewTitle] = useState("");
+  const [newDescription, setNewDescription] = useState("");
+  const [newMandatory, setNewMandatory] = useState(false);
+  const [newLessons, setNewLessons] = useState<{ title: string; content: string; estimated_minutes: number }[]>([
+    { title: "", content: "", estimated_minutes: 5 },
+  ]);
+  const isCreator = profile?.role === "creator" || profile?.role === "moderator" || !!preferences?.members_can_create_courses;
+
   useEffect(() => {
     if (userLoading || !profile) return;
 
     async function fetchData() {
-      const supabase = createClient();
-
-      const [coursesResult, enrollmentsResult] = await Promise.all([
-        supabase
-          .from("courses")
-          .select("*, lessons(*)")
-          .eq("workspace_id", profile!.workspace_id)
-          .order("created_at"),
-        supabase
-          .from("course_enrollments")
-          .select("*")
-          .eq("profile_id", profile!.id),
+      const [coursesData, enrollmentsData] = await Promise.all([
+        api<Course[]>("/courses"),
+        api<CourseEnrollment[]>("/enrollments"),
       ]);
 
-      setCourses((coursesResult.data as Course[]) ?? []);
-      setEnrollmentState((enrollmentsResult.data as CourseEnrollment[]) ?? []);
+      setCourses(coursesData);
+      setEnrollmentState(enrollmentsData);
       setDataLoading(false);
     }
 
@@ -84,16 +85,15 @@ export function OnboardingContent() {
 
   async function completeLesson(sortOrder: number) {
     if (!activeCourse || !profile) return;
-    const supabase = createClient();
 
     const existing = enrollmentState.find((e) => e.course_id === activeCourse.id);
     if (existing) {
       if (existing.completed_lessons.includes(sortOrder)) return;
       const updatedLessons = [...existing.completed_lessons, sortOrder];
-      await supabase
-        .from("course_enrollments")
-        .update({ completed_lessons: updatedLessons })
-        .eq("id", existing.id);
+      await api("/enrollments", {
+        method: "PATCH",
+        body: JSON.stringify({ id: existing.id, completed_lessons: updatedLessons }),
+      });
       setEnrollmentState((prev) =>
         prev.map((e) =>
           e.course_id === activeCourse.id
@@ -102,14 +102,11 @@ export function OnboardingContent() {
         )
       );
     } else {
-      const { data } = await supabase
-        .from("course_enrollments")
-        .insert({ profile_id: profile.id, course_id: activeCourse.id, completed_lessons: [sortOrder] })
-        .select()
-        .single();
-      if (data) {
-        setEnrollmentState((prev) => [...prev, data as CourseEnrollment]);
-      }
+      const data = await api<CourseEnrollment>("/enrollments", {
+        method: "POST",
+        body: JSON.stringify({ course_id: activeCourse.id, completed_lessons: [sortOrder] }),
+      });
+      setEnrollmentState((prev) => [...prev, data]);
     }
 
     toast("Lesson completed!");
@@ -120,6 +117,138 @@ export function OnboardingContent() {
   }
 
   const isLessonComplete = (sortOrder: number) => activeEnrollment?.completed_lessons.includes(sortOrder) ?? false;
+
+  async function handleCreateCourse() {
+    if (!newTitle.trim()) { toast("Course title is required", "error"); return; }
+    const validLessons = newLessons.filter((l) => l.title.trim());
+    if (validLessons.length === 0) { toast("Add at least one lesson with a title", "error"); return; }
+
+    try {
+      const data = await api<Course>("/courses", {
+        method: "POST",
+        body: JSON.stringify({
+          title: newTitle.trim(),
+          description: newDescription.trim() || null,
+          is_mandatory: newMandatory,
+          lessons: validLessons.map((l, i) => ({
+            title: l.title.trim(),
+            content: l.content.trim() || `# ${l.title.trim()}\n\nLesson content goes here...`,
+            sort_order: i + 1,
+            estimated_minutes: l.estimated_minutes,
+          })),
+        }),
+      });
+      setCourses((prev) => [...prev, data]);
+      toast("Course created successfully");
+      setShowCreate(false);
+      setNewTitle(""); setNewDescription(""); setNewMandatory(false);
+      setNewLessons([{ title: "", content: "", estimated_minutes: 5 }]);
+    } catch {
+      toast("Failed to create course", "error");
+    }
+  }
+
+  function addLesson() {
+    setNewLessons((prev) => [...prev, { title: "", content: "", estimated_minutes: 5 }]);
+  }
+
+  function removeLesson(index: number) {
+    setNewLessons((prev) => prev.filter((_, i) => i !== index));
+  }
+
+  function updateLesson(index: number, field: string, value: string | number) {
+    setNewLessons((prev) => prev.map((l, i) => i === index ? { ...l, [field]: value } : l));
+  }
+
+  function renderCreateModal() {
+    return (
+      <AnimatePresence>
+        {showCreate && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center">
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 bg-black/50" onClick={() => setShowCreate(false)} />
+            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} transition={{ duration: 0.15 }} className="relative w-full max-w-2xl max-h-[85vh] overflow-y-auto rounded-xl border border-slate-200 bg-white p-6 shadow-xl dark:border-slate-700 dark:bg-slate-900">
+              <div className="flex items-center justify-between">
+                <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100">Create Onboarding Course</h3>
+                <button onClick={() => setShowCreate(false)} className="rounded-md p-1 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"><X className="h-5 w-5" /></button>
+              </div>
+
+              <div className="mt-4 space-y-4">
+                <label className="block">
+                  <span className="mb-1 block text-sm font-medium text-slate-600 dark:text-slate-300">Course Title *</span>
+                  <input value={newTitle} onChange={(e) => setNewTitle(e.target.value)} placeholder="e.g. Welcome to the Team" className="radia-input w-full px-3 py-2.5 text-sm text-slate-900 dark:text-slate-100" />
+                </label>
+
+                <label className="block">
+                  <span className="mb-1 block text-sm font-medium text-slate-600 dark:text-slate-300">Description</span>
+                  <textarea value={newDescription} onChange={(e) => setNewDescription(e.target.value)} rows={2} placeholder="Brief description of what this course covers..." className="radia-input w-full resize-none px-3 py-2.5 text-sm text-slate-900 dark:text-slate-100" />
+                </label>
+
+                <label className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setNewMandatory(!newMandatory)}
+                    className={`relative h-6 w-11 rounded-full transition ${newMandatory ? "bg-indigo-600" : "bg-slate-300 dark:bg-slate-700"}`}
+                  >
+                    <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white transition-transform ${newMandatory ? "translate-x-5" : "translate-x-0.5"}`} />
+                  </button>
+                  <span className="text-sm font-medium text-slate-600 dark:text-slate-300">Required for all employees</span>
+                </label>
+
+                <div>
+                  <div className="mb-2 flex items-center justify-between">
+                    <span className="text-sm font-medium text-slate-600 dark:text-slate-300">Lessons *</span>
+                    <button onClick={addLesson} className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-indigo-600 hover:bg-indigo-50 dark:text-indigo-400 dark:hover:bg-indigo-500/10">
+                      <Plus className="h-3.5 w-3.5" />Add Lesson
+                    </button>
+                  </div>
+                  <div className="space-y-3">
+                    {newLessons.map((lesson, idx) => (
+                      <div key={idx} className="rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-800/50">
+                        <div className="flex items-center gap-2 mb-2">
+                          <span className="flex h-5 w-5 items-center justify-center rounded-full bg-indigo-100 text-[10px] font-semibold text-indigo-600 dark:bg-indigo-500/20 dark:text-indigo-300">{idx + 1}</span>
+                          <input
+                            value={lesson.title}
+                            onChange={(e) => updateLesson(idx, "title", e.target.value)}
+                            placeholder={`Lesson ${idx + 1} title...`}
+                            className="radia-input flex-1 px-2.5 py-1.5 text-sm text-slate-900 dark:text-slate-100"
+                          />
+                          <input
+                            type="number"
+                            value={lesson.estimated_minutes}
+                            onChange={(e) => updateLesson(idx, "estimated_minutes", parseInt(e.target.value) || 5)}
+                            className="radia-input w-16 px-2 py-1.5 text-center text-sm text-slate-900 dark:text-slate-100"
+                            min={1}
+                          />
+                          <span className="text-xs text-slate-400">min</span>
+                          {newLessons.length > 1 && (
+                            <button onClick={() => removeLesson(idx)} className="rounded p-1 text-slate-400 hover:bg-rose-50 hover:text-rose-500 dark:hover:bg-rose-500/10">
+                              <Minus className="h-3.5 w-3.5" />
+                            </button>
+                          )}
+                        </div>
+                        <textarea
+                          value={lesson.content}
+                          onChange={(e) => updateLesson(idx, "content", e.target.value)}
+                          rows={3}
+                          placeholder="Lesson content (Markdown supported)..."
+                          className="radia-input w-full resize-none px-2.5 py-1.5 font-mono text-xs text-slate-900 dark:text-slate-100"
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="flex justify-end gap-2 pt-2">
+                  <button onClick={() => setShowCreate(false)} className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800">Cancel</button>
+                  <button onClick={handleCreateCourse} className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700">Create Course</button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+    );
+  }
 
   if (userLoading || dataLoading) {
     return (
@@ -138,9 +267,17 @@ export function OnboardingContent() {
           </span>
           <h3 className="mt-5 text-base font-semibold text-slate-900 dark:text-slate-100">No onboarding courses yet</h3>
           <p className="mt-2 max-w-sm text-sm leading-relaxed text-slate-500 dark:text-slate-400">
-            Your workspace admin hasn&apos;t created any onboarding courses yet. Check back later or ask your admin to set up the training program.
+            {isCreator
+              ? "Create your first onboarding course to help new team members get started."
+              : "Your workspace admin hasn't created any onboarding courses yet. Check back later."}
           </p>
+          {isCreator && (
+            <button onClick={() => setShowCreate(true)} className="mt-6 inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-5 py-2.5 text-sm font-medium text-white transition hover:bg-indigo-700">
+              <Plus className="h-4 w-4" />Create First Course
+            </button>
+          )}
         </div>
+        {renderCreateModal()}
       </div>
     );
   }
@@ -172,9 +309,16 @@ export function OnboardingContent() {
             {completedLessons} of {totalLessons} lessons completed
           </p>
         </div>
-        <button onClick={handleResume} className="flex-shrink-0 rounded-lg bg-indigo-600 px-5 py-2.5 text-sm font-medium text-white transition hover:bg-indigo-700">
-          {overallProgress >= 100 ? "Review" : "Resume"}
-        </button>
+        <div className="flex flex-shrink-0 gap-2">
+          {isCreator && (
+            <button onClick={() => setShowCreate(true)} className="rounded-lg border border-indigo-300 bg-white px-4 py-2.5 text-sm font-medium text-indigo-700 transition hover:bg-indigo-50 dark:border-indigo-500/50 dark:bg-transparent dark:text-indigo-300 dark:hover:bg-indigo-500/10">
+              <Plus className="inline h-4 w-4 mr-1" />New Course
+            </button>
+          )}
+          <button onClick={handleResume} className="rounded-lg bg-indigo-600 px-5 py-2.5 text-sm font-medium text-white transition hover:bg-indigo-700">
+            {overallProgress >= 100 ? "Review" : "Resume"}
+          </button>
+        </div>
       </motion.div>
 
       {/* Course cards — centered grid */}
@@ -220,6 +364,8 @@ export function OnboardingContent() {
           );
         })}
       </div>
+
+      {renderCreateModal()}
 
       {/* Course Viewer — centered overlay */}
       <AnimatePresence>

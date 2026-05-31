@@ -467,16 +467,20 @@ function Callout({ type, children }: { type: "info" | "warning" | "tip"; childre
 }
 
 // ─── Main component ───────────────────────────────────────────────────────
+function getNumberedListIndex(blocks: ParsedBlock[], index: number): number {
+  let count = 1;
+  for (let cursor = index - 1; cursor >= 0 && blocks[cursor].type === "numbered"; cursor--) {
+    count++;
+  }
+  return count;
+}
+
 export function RichContent({ content }: { content: string }) {
   const blocks = useMemo(() => parseBlocks(content), [content]);
-  let numberedIdx = 0;
 
   return (
     <div className="rich-content space-y-1">
       {blocks.map((block, i) => {
-        // Reset numbered list counter when not a numbered block
-        if (block.type !== "numbered") numberedIdx = 0;
-
         switch (block.type) {
           case "h1":
             return <h1 key={i} className="mt-6 mb-2 text-2xl font-bold tracking-tight text-slate-900 dark:text-slate-100">{renderInline(block.content)}</h1>;
@@ -494,10 +498,9 @@ export function RichContent({ content }: { content: string }) {
               </div>
             );
           case "numbered":
-            numberedIdx++;
             return (
               <div key={i} className="flex gap-2 pl-1 text-sm leading-relaxed text-slate-600 dark:text-slate-300">
-                <span className="w-5 flex-shrink-0 text-right font-mono text-xs font-semibold text-slate-400 dark:text-slate-500">{numberedIdx}.</span>
+                <span className="w-5 flex-shrink-0 text-right font-mono text-xs font-semibold text-slate-400 dark:text-slate-500">{getNumberedListIndex(blocks, i)}.</span>
                 <span>{renderInline(block.content)}</span>
               </div>
             );

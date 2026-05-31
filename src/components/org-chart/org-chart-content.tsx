@@ -13,7 +13,7 @@ import {
   ZoomOut,
 } from "lucide-react";
 import { useUser } from "@/lib/user-context";
-import { createClient } from "@/lib/supabase/client";
+import { api } from "@/lib/api";
 import { buildOrgTree } from "@/lib/utils/roles";
 import type { OrgNode } from "@/lib/types";
 import type { Profile } from "@/lib/types";
@@ -193,10 +193,9 @@ export function OrgChartContent() {
     let cancelled = false;
     async function fetchProfiles() {
       setLoadingProfiles(true);
-      const supabase = createClient();
-      const { data } = await supabase.from("profiles").select("*").eq("workspace_id", profile!.workspace_id);
+      const data = await api<Profile[]>("/profiles");
       if (!cancelled) {
-        setProfilesList((data as Profile[]) ?? []);
+        setProfilesList(data);
         setLoadingProfiles(false);
       }
     }

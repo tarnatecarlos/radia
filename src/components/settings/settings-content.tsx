@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   AlertTriangle,
   Bell,
@@ -9,15 +9,16 @@ import {
   Mail,
   MessageSquare,
   Save,
+  Shield,
   Smartphone,
   Trash2,
-  Upload,
   User,
 } from "lucide-react";
 import { useUser } from "@/lib/user-context";
-import { createClient } from "@/lib/supabase/client";
+import { api } from "@/lib/api";
 import { useToast } from "@/components/ui/toast";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import type { WorkspacePreferences } from "@/lib/types";
 
 interface NotificationPrefs {
   emailDigest: boolean;
@@ -36,6 +37,41 @@ const NOTIF_KEY_MAP: Record<keyof NotificationPrefs, string> = {
   inAppAll: "in_app_all",
   inAppTasks: "in_app_tasks",
 };
+
+interface PermissionPrefs {
+  members_can_create_tasks: boolean;
+  members_can_create_sops: boolean;
+  members_can_create_courses: boolean;
+  members_can_manage_integrations: boolean;
+  allowed_integrations: string[];
+}
+
+const INTEGRATION_PLATFORMS = ["slack", "github", "gmail", "discord", "teams", "messenger"];
+
+const DEFAULT_PERMISSION_PREFS: PermissionPrefs = {
+  members_can_create_tasks: true,
+  members_can_create_sops: false,
+  members_can_create_courses: false,
+  members_can_manage_integrations: false,
+  allowed_integrations: [...INTEGRATION_PLATFORMS],
+};
+
+function toPermissionPrefs(preferences: WorkspacePreferences | null): PermissionPrefs {
+  if (!preferences) {
+    return {
+      ...DEFAULT_PERMISSION_PREFS,
+      allowed_integrations: [...DEFAULT_PERMISSION_PREFS.allowed_integrations],
+    };
+  }
+
+  return {
+    members_can_create_tasks: preferences.members_can_create_tasks,
+    members_can_create_sops: preferences.members_can_create_sops,
+    members_can_create_courses: preferences.members_can_create_courses,
+    members_can_manage_integrations: preferences.members_can_manage_integrations,
+    allowed_integrations: preferences.allowed_integrations,
+  };
+}
 
 function Toggle({
   checked, onChange, label, description,
@@ -57,56 +93,43 @@ function Toggle({
 
 export function SettingsContent() {
   const { toast } = useToast();
-  const { profile, workspace, refresh } = useUser();
-  const supabase = createClient();
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const { profile, workspace, preferences, refresh } = useUser();
 
-  const [workspaceName, setWorkspaceName] = useState("");
-  const [subdomain, setSubdomain] = useState("");
-  const [logoPreview, setLogoPreview] = useState<string | null>(null);
-  const [firstName, setFirstName] = useState("");
-  const [lastName, setLastName] = useState("");
-  const [email, setEmail] = useState("");
-  const [title, setTitle] = useState("");
+  const [workspaceDraft, setWorkspaceDraft] = useState<Partial<{ name: string; subdomain: string }>>({});
+  const [profileDraft, setProfileDraft] = useState<Partial<{ firstName: string; lastName: string; email: string; title: string }>>({});
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [savingWorkspace, setSavingWorkspace] = useState(false);
   const [savingProfile, setSavingProfile] = useState(false);
 
+  const [permPrefsDraft, setPermPrefsDraft] = useState<PermissionPrefs | null>(null);
+  const [savingPerms, setSavingPerms] = useState(false);
+
   const [notifications, setNotifications] = useState<NotificationPrefs>({
     emailDigest: true, emailMentions: true, slackUpdates: true,
     slackMilestones: false, inAppAll: true, inAppTasks: true,
   });
 
-  // Initialize form fields from user context
-  useEffect(() => {
-    if (profile) {
-      setFirstName(profile.first_name);
-      setLastName(profile.last_name);
-      setEmail(profile.email);
-      setTitle(profile.title ?? "");
-    }
-  }, [profile]);
+  const workspaceName = workspaceDraft.name ?? workspace?.name ?? "";
+  const subdomain = workspaceDraft.subdomain ?? workspace?.subdomain ?? "";
+  const logoPreview = workspace?.logo_url ?? null;
+  const firstName = profileDraft.firstName ?? profile?.first_name ?? "";
+  const lastName = profileDraft.lastName ?? profile?.last_name ?? "";
+  const email = profileDraft.email ?? profile?.email ?? "";
+  const title = profileDraft.title ?? profile?.title ?? "";
+  const permPrefs = permPrefsDraft ?? toPermissionPrefs(preferences);
 
-  useEffect(() => {
-    if (workspace) {
-      setWorkspaceName(workspace.name);
-      setSubdomain(workspace.subdomain);
-      setLogoPreview(workspace.logo_url ?? null);
-    }
-  }, [workspace]);
+  function updatePermissionPrefs(updater: (current: PermissionPrefs) => PermissionPrefs) {
+    setPermPrefsDraft((current) => updater(current ?? permPrefs));
+  }
 
-  // Fetch notification preferences from Supabase
+  // Fetch notification preferences
   useEffect(() => {
     if (!profile) return;
     async function fetchNotifications() {
-      const { data } = await supabase
-        .from("notification_preferences")
-        .select("*")
-        .eq("profile_id", profile!.id)
-        .single();
-      if (data) {
+      try {
+        const data = await api<Record<string, boolean>>("/notifications");
         setNotifications({
           emailDigest: data.email_digest ?? true,
           emailMentions: data.email_mentions ?? true,
@@ -115,6 +138,8 @@ export function SettingsContent() {
           inAppAll: data.in_app_all ?? true,
           inAppTasks: data.in_app_tasks ?? true,
         });
+      } catch {
+        // use defaults
       }
     }
     fetchNotifications();
@@ -126,19 +151,31 @@ export function SettingsContent() {
     setNotifications((prev) => ({ ...prev, [key]: newValue }));
 
     const dbKey = NOTIF_KEY_MAP[key];
-    const { error } = await supabase
-      .from("notification_preferences")
-      .update({ [dbKey]: newValue })
-      .eq("profile_id", profile.id);
-
-    if (error) {
+    try {
+      await api("/notifications", { method: "PATCH", body: JSON.stringify({ [dbKey]: newValue }) });
+      toast("Notification preference updated");
+    } catch {
       // Revert on failure
       setNotifications((prev) => ({ ...prev, [key]: !newValue }));
       toast("Failed to update preference", "error");
-    } else {
-      toast("Notification preference updated");
     }
   };
+
+  async function handleSavePermissions() {
+    setSavingPerms(true);
+    try {
+      await api("/preferences", {
+        method: "PATCH",
+        body: JSON.stringify(permPrefs),
+      });
+      await refresh();
+      setPermPrefsDraft(null);
+      toast("Workspace permissions saved");
+    } catch {
+      toast("Failed to save permissions", "error");
+    }
+    setSavingPerms(false);
+  }
 
   async function handleSaveWorkspace() {
     if (!workspace) return;
@@ -146,18 +183,15 @@ export function SettingsContent() {
     if (!subdomain.trim()) { toast("Subdomain is required", "error"); return; }
     setSavingWorkspace(true);
 
-    const { error } = await supabase
-      .from("workspaces")
-      .update({ name: workspaceName, subdomain })
-      .eq("id", workspace.id);
-
-    setSavingWorkspace(false);
-    if (error) {
-      toast("Failed to save workspace settings", "error");
-    } else {
+    try {
+      await api("/workspaces", { method: "PATCH", body: JSON.stringify({ id: workspace.id, name: workspaceName, subdomain }) });
       await refresh();
+      setWorkspaceDraft({});
       toast("Workspace settings saved");
+    } catch {
+      toast("Failed to save workspace settings", "error");
     }
+    setSavingWorkspace(false);
   }
 
   async function handleSaveProfile() {
@@ -168,84 +202,38 @@ export function SettingsContent() {
     if (newPassword && !currentPassword) { toast("Enter current password to change password", "error"); return; }
     setSavingProfile(true);
 
-    const { error } = await supabase
-      .from("profiles")
-      .update({ first_name: firstName, last_name: lastName, email, title })
-      .eq("id", profile.id);
+    try {
+      await api("/profiles", {
+        method: "PATCH",
+        body: JSON.stringify({ id: profile.id, first_name: firstName, last_name: lastName, email, title }),
+      });
 
-    if (error) {
-      setSavingProfile(false);
-      toast("Failed to save profile", "error");
-      return;
-    }
-
-    // Update password if requested
-    if (newPassword) {
-      const { error: pwError } = await supabase.auth.updateUser({ password: newPassword });
-      if (pwError) {
-        setSavingProfile(false);
-        toast(pwError.message || "Failed to update password", "error");
-        return;
+      // Update password if requested
+      if (newPassword) {
+        await api("/auth/password", {
+          method: "PATCH",
+          body: JSON.stringify({ currentPassword, newPassword }),
+        });
       }
-    }
 
-    await refresh();
+      await refresh();
+      setProfileDraft({});
+      setCurrentPassword("");
+      setNewPassword("");
+      toast("Profile saved successfully");
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Failed to save profile", "error");
+    }
     setSavingProfile(false);
-    setCurrentPassword("");
-    setNewPassword("");
-    toast("Profile saved successfully");
-  }
-
-  async function handleLogoUpload(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file || !workspace) return;
-    if (!file.type.startsWith("image/")) { toast("Please select an image file", "error"); return; }
-    if (file.size > 2 * 1024 * 1024) { toast("Image must be under 2MB", "error"); return; }
-
-    const ext = file.name.split(".").pop() ?? "png";
-    const filePath = `logos/${workspace.id}.${ext}`;
-
-    const { error: uploadError } = await supabase.storage
-      .from("workspace-assets")
-      .upload(filePath, file, { upsert: true });
-
-    if (uploadError) {
-      toast("Failed to upload logo", "error");
-      return;
-    }
-
-    const { data: urlData } = supabase.storage
-      .from("workspace-assets")
-      .getPublicUrl(filePath);
-
-    const logoUrl = urlData.publicUrl;
-
-    const { error: updateError } = await supabase
-      .from("workspaces")
-      .update({ logo_url: logoUrl })
-      .eq("id", workspace.id);
-
-    if (updateError) {
-      toast("Failed to update logo URL", "error");
-      return;
-    }
-
-    setLogoPreview(logoUrl);
-    await refresh();
-    toast("Logo uploaded");
   }
 
   async function handleDeleteWorkspace() {
     if (!workspace) return;
-    const { error } = await supabase
-      .from("workspaces")
-      .delete()
-      .eq("id", workspace.id);
-
-    if (error) {
-      toast("Failed to delete workspace", "error");
-    } else {
+    try {
+      await api("/workspaces", { method: "DELETE", body: JSON.stringify({ id: workspace.id }) });
       toast("Workspace deleted", "error");
+    } catch {
+      toast("Failed to delete workspace", "error");
     }
     setShowDeleteConfirm(false);
   }
@@ -257,42 +245,85 @@ export function SettingsContent() {
         <p className="mt-1 text-sm text-slate-400 dark:text-slate-500">Manage workspace and personal preferences</p>
       </div>
 
-      <section className="radia-card p-6">
-        <div className="mb-5 flex items-center gap-3">
-          <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-indigo-50 text-indigo-700 dark:bg-indigo-500/20 dark:text-indigo-300"><Building2 className="h-5 w-5" /></span>
-          <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100">Workspace Settings</h2>
-        </div>
-        <div className="space-y-4">
-          <label className="block">
-            <span className="mb-1.5 block text-sm font-medium text-slate-600 dark:text-slate-300">Workspace Name</span>
-            <input value={workspaceName} onChange={(e) => setWorkspaceName(e.target.value)} className="radia-input w-full px-3 py-2.5 text-sm text-slate-900 dark:text-slate-100" />
-          </label>
-          <label className="block">
-            <span className="mb-1.5 block text-sm font-medium text-slate-600 dark:text-slate-300">Subdomain</span>
-            <div className="flex items-center gap-2">
-              <input value={subdomain} onChange={(e) => setSubdomain(e.target.value)} className="radia-input w-full px-3 py-2.5 text-sm text-slate-900 dark:text-slate-100" />
-              <span className="text-sm text-slate-400 dark:text-slate-500">.radia.app</span>
-            </div>
-          </label>
-          <div>
-            <span className="mb-1.5 block text-sm font-medium text-slate-600 dark:text-slate-300">Workspace Logo</span>
-            <div className="flex items-center gap-4">
-              {logoPreview ? (
-                <img src={logoPreview} alt="Logo" className="h-16 w-16 rounded-xl object-cover" />
-              ) : (
-                <span className="flex h-16 w-16 items-center justify-center rounded-xl bg-indigo-600 text-2xl font-bold text-white">R</span>
-              )}
-              <input ref={fileInputRef} type="file" accept="image/*" onChange={handleLogoUpload} className="hidden" />
-              <button onClick={() => fileInputRef.current?.click()} className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800">
-                <Upload className="h-4 w-4" />Upload New Logo
-              </button>
-            </div>
+      {profile?.role === "creator" && (
+        <section className="radia-card p-6">
+          <div className="mb-5 flex items-center gap-3">
+            <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-indigo-50 text-indigo-700 dark:bg-indigo-500/20 dark:text-indigo-300"><Building2 className="h-5 w-5" /></span>
+            <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100">Workspace Settings</h2>
           </div>
-          <button onClick={handleSaveWorkspace} disabled={savingWorkspace} className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-indigo-700 disabled:opacity-50">
-            <Save className="h-4 w-4" />{savingWorkspace ? "Saving..." : "Save Changes"}
-          </button>
-        </div>
-      </section>
+          <div className="space-y-4">
+            <label className="block">
+              <span className="mb-1.5 block text-sm font-medium text-slate-600 dark:text-slate-300">Workspace Name</span>
+              <input value={workspaceName} onChange={(e) => setWorkspaceDraft((current) => ({ ...current, name: e.target.value }))} className="radia-input w-full px-3 py-2.5 text-sm text-slate-900 dark:text-slate-100" />
+            </label>
+            <label className="block">
+              <span className="mb-1.5 block text-sm font-medium text-slate-600 dark:text-slate-300">Subdomain</span>
+              <div className="flex items-center gap-2">
+                <input value={subdomain} onChange={(e) => setWorkspaceDraft((current) => ({ ...current, subdomain: e.target.value }))} className="radia-input w-full px-3 py-2.5 text-sm text-slate-900 dark:text-slate-100" />
+                <span className="text-sm text-slate-400 dark:text-slate-500">.radia.app</span>
+              </div>
+            </label>
+            <div>
+              <span className="mb-1.5 block text-sm font-medium text-slate-600 dark:text-slate-300">Workspace Logo</span>
+              <div className="flex items-center gap-4">
+                {logoPreview ? (
+                  <span aria-label="Workspace logo" role="img" className="h-16 w-16 rounded-xl bg-cover bg-center" style={{ backgroundImage: `url(${logoPreview})` }} />
+                ) : (
+                  <span className="flex h-16 w-16 items-center justify-center rounded-xl bg-indigo-600 text-2xl font-bold text-white">R</span>
+                )}
+                <span className="text-sm text-slate-400 dark:text-slate-500">Logo upload coming soon</span>
+              </div>
+            </div>
+            <button onClick={handleSaveWorkspace} disabled={savingWorkspace} className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-indigo-700 disabled:opacity-50">
+              <Save className="h-4 w-4" />{savingWorkspace ? "Saving..." : "Save Changes"}
+            </button>
+          </div>
+        </section>
+      )}
+
+      {profile?.role === "creator" && (
+        <section className="radia-card p-6">
+          <div className="mb-5 flex items-center gap-3">
+            <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-violet-50 text-violet-700 dark:bg-violet-500/20 dark:text-violet-300"><Shield className="h-5 w-5" /></span>
+            <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100">Workspace Permissions</h2>
+          </div>
+          <p className="mb-4 text-sm text-slate-500 dark:text-slate-400">Control what workspace members can do. Creators and moderators always have full access.</p>
+          <div className="space-y-4">
+            <Toggle checked={permPrefs.members_can_create_tasks} onChange={() => updatePermissionPrefs(p => ({ ...p, members_can_create_tasks: !p.members_can_create_tasks }))} label="Members can create tasks" description="Allow all members to create new tasks" />
+            <Toggle checked={permPrefs.members_can_create_sops} onChange={() => updatePermissionPrefs(p => ({ ...p, members_can_create_sops: !p.members_can_create_sops }))} label="Members can create SOPs" description="Allow all members to create and edit standard operating procedures" />
+            <Toggle checked={permPrefs.members_can_create_courses} onChange={() => updatePermissionPrefs(p => ({ ...p, members_can_create_courses: !p.members_can_create_courses }))} label="Members can create onboarding courses" description="Allow all members to create training courses and lessons" />
+            <Toggle checked={permPrefs.members_can_manage_integrations} onChange={() => updatePermissionPrefs(p => ({ ...p, members_can_manage_integrations: !p.members_can_manage_integrations }))} label="Members can manage integrations" description="Allow all members to enable/disable and configure integrations" />
+
+            <div className="border-t border-slate-200 pt-4 dark:border-slate-700">
+              <p className="mb-3 text-sm font-medium text-slate-600 dark:text-slate-300">Allowed Integration Platforms</p>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                {INTEGRATION_PLATFORMS.map((platform) => (
+                  <label key={platform} className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2.5 dark:border-slate-700 dark:bg-slate-900">
+                    <input
+                      type="checkbox"
+                      checked={permPrefs.allowed_integrations.includes(platform)}
+                      onChange={() => {
+                        updatePermissionPrefs(p => ({
+                          ...p,
+                          allowed_integrations: p.allowed_integrations.includes(platform)
+                            ? p.allowed_integrations.filter(x => x !== platform)
+                            : [...p.allowed_integrations, platform],
+                        }));
+                      }}
+                      className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                    />
+                    <span className="text-sm capitalize text-slate-700 dark:text-slate-200">{platform}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            <button onClick={handleSavePermissions} disabled={savingPerms} className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-indigo-700 disabled:opacity-50">
+              <Save className="h-4 w-4" />{savingPerms ? "Saving..." : "Save Permissions"}
+            </button>
+          </div>
+        </section>
+      )}
 
       <section className="radia-card p-6">
         <div className="mb-5 flex items-center gap-3">
@@ -303,20 +334,20 @@ export function SettingsContent() {
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             <label className="block">
               <span className="mb-1.5 block text-sm font-medium text-slate-600 dark:text-slate-300">First Name</span>
-              <input value={firstName} onChange={(e) => setFirstName(e.target.value)} className="radia-input w-full px-3 py-2.5 text-sm text-slate-900 dark:text-slate-100" />
+              <input value={firstName} onChange={(e) => setProfileDraft((current) => ({ ...current, firstName: e.target.value }))} className="radia-input w-full px-3 py-2.5 text-sm text-slate-900 dark:text-slate-100" />
             </label>
             <label className="block">
               <span className="mb-1.5 block text-sm font-medium text-slate-600 dark:text-slate-300">Last Name</span>
-              <input value={lastName} onChange={(e) => setLastName(e.target.value)} className="radia-input w-full px-3 py-2.5 text-sm text-slate-900 dark:text-slate-100" />
+              <input value={lastName} onChange={(e) => setProfileDraft((current) => ({ ...current, lastName: e.target.value }))} className="radia-input w-full px-3 py-2.5 text-sm text-slate-900 dark:text-slate-100" />
             </label>
           </div>
           <label className="block">
             <span className="mb-1.5 block text-sm font-medium text-slate-600 dark:text-slate-300">Email</span>
-            <input value={email} onChange={(e) => setEmail(e.target.value)} className="radia-input w-full px-3 py-2.5 text-sm text-slate-900 dark:text-slate-100" />
+            <input value={email} onChange={(e) => setProfileDraft((current) => ({ ...current, email: e.target.value }))} className="radia-input w-full px-3 py-2.5 text-sm text-slate-900 dark:text-slate-100" />
           </label>
           <label className="block">
             <span className="mb-1.5 block text-sm font-medium text-slate-600 dark:text-slate-300">Title</span>
-            <input value={title} onChange={(e) => setTitle(e.target.value)} className="radia-input w-full px-3 py-2.5 text-sm text-slate-900 dark:text-slate-100" />
+            <input value={title} onChange={(e) => setProfileDraft((current) => ({ ...current, title: e.target.value }))} className="radia-input w-full px-3 py-2.5 text-sm text-slate-900 dark:text-slate-100" />
           </label>
           <div className="border-t border-slate-200 pt-4 dark:border-slate-700">
             <div className="mb-3 flex items-center gap-2">

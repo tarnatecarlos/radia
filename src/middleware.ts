@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { createServerClient } from "@supabase/ssr";
 
-const PUBLIC_PATHS = ["/", "/login", "/signup", "/auth/callback", "/auth/confirm"];
+const PUBLIC_PATHS = ["/", "/login", "/signup", "/invite"];
+const SESSION_COOKIE = "radia_session";
 
 function getRedirectUrl(pathname: string, request: NextRequest): URL {
   const siteUrl = process.env.NEXT_PUBLIC_SITE_URL;
@@ -15,7 +15,12 @@ export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   // Allow public paths
-  if (PUBLIC_PATHS.includes(pathname)) {
+  if (PUBLIC_PATHS.some((p) => pathname === p || pathname.startsWith(p + "/"))) {
+    return NextResponse.next();
+  }
+
+  // Allow API routes (they handle their own auth)
+  if (pathname.startsWith("/api")) {
     return NextResponse.next();
   }
 
@@ -24,55 +29,41 @@ export async function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  let response = NextResponse.next({ request });
+  const sessionId = request.cookies.get(SESSION_COOKIE)?.value;
 
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-
-  // If Supabase is not configured, allow access (dev mode)
-  if (!supabaseUrl || !supabaseKey) {
-    return response;
-  }
-
-  const supabase = createServerClient(supabaseUrl, supabaseKey, {
-    cookies: {
-      getAll() {
-        return request.cookies.getAll();
-      },
-      setAll(cookiesToSet) {
-        for (const { name, value } of cookiesToSet) {
-          request.cookies.set(name, value);
-        }
-        response = NextResponse.next({ request });
-        for (const { name, value, options } of cookiesToSet) {
-          response.cookies.set(name, value, options);
-        }
-      },
-    },
-  });
-
-  const { data: { user } } = await supabase.auth.getUser();
-
-  if (!user) {
+  if (!sessionId) {
     const loginUrl = getRedirectUrl("/login", request);
     loginUrl.searchParams.set("redirect", pathname);
     return NextResponse.redirect(loginUrl);
   }
 
-  // Check setup_completed for dashboard routes
-  if (pathname.startsWith("/dashboard")) {
-    const { data: profile } = await supabase
-      .from("profiles")
-      .select("setup_completed")
-      .eq("auth_user_id", user.id)
-      .single();
+  // Verify session by calling the /api/auth/me endpoint
+  // We can't use SQLite directly in middleware (edge), so we check via API
+  try {
+    const meUrl = new URL("/api/auth/me", request.url);
+    const res = await fetch(meUrl.toString(), {
+      headers: { cookie: `${SESSION_COOKIE}=${sessionId}` },
+    });
 
-    if (profile && !profile.setup_completed) {
-      return NextResponse.redirect(getRedirectUrl("/setup", request));
+    if (!res.ok) {
+      const loginUrl = getRedirectUrl("/login", request);
+      loginUrl.searchParams.set("redirect", pathname);
+      return NextResponse.redirect(loginUrl);
     }
+
+    // Check setup_completed for dashboard routes
+    if (pathname.startsWith("/dashboard")) {
+      const data = await res.json();
+      if (data.profile && !data.profile.setup_completed) {
+        return NextResponse.redirect(getRedirectUrl("/setup", request));
+      }
+    }
+  } catch {
+    // If API is unreachable, allow access (dev mode resilience)
+    return NextResponse.next();
   }
 
-  return response;
+  return NextResponse.next();
 }
 
 export const config = {

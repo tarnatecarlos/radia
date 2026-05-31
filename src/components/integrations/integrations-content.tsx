@@ -1,10 +1,10 @@
 "use client";
 
-import { useState, useEffect, useCallback, type ComponentType, type CSSProperties } from "react";
+import { useState, useEffect, type ComponentType, type CSSProperties } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { GitBranch, Hash, Mail, MessageSquare, Send, Settings, Users, X, Zap } from "lucide-react";
 import { useUser } from "@/lib/user-context";
-import { createClient } from "@/lib/supabase/client";
+import { api } from "@/lib/api";
 import { useToast } from "@/components/ui/toast";
 
 interface IntegrationRow {
@@ -86,25 +86,38 @@ const iconMap: Record<string, ComponentType<{ className?: string }>> = {
 
 export function IntegrationsContent() {
   const { toast } = useToast();
-  const { profile, refresh } = useUser();
-  const supabase = createClient();
+  const { profile, preferences, refresh } = useUser();
+  const canManage = profile?.role === 'creator' || profile?.role === 'moderator' || !!preferences?.members_can_manage_integrations;
 
   const [integrationStates, setIntegrationStates] = useState<IntegrationRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [configuring, setConfiguring] = useState<string | null>(null);
   const [configValues, setConfigValues] = useState<Record<string, string>>({});
+  const filteredIntegrations = canManage
+    ? integrationStates
+    : integrationStates.filter(i => preferences?.allowed_integrations?.includes(i.platform_name));
   const connectedCount = integrationStates.filter((item) => item.is_active).length;
 
-  const fetchIntegrations = useCallback(async () => {
-    if (!profile?.workspace_id) return;
-    const { data } = await supabase.from("integrations").select("*").eq("workspace_id", profile.workspace_id);
-    if (data) setIntegrationStates(data as IntegrationRow[]);
-    setLoading(false);
-  }, [profile?.workspace_id, supabase]);
-
   useEffect(() => {
-    fetchIntegrations();
-  }, [fetchIntegrations]);
+    if (!profile?.workspace_id) return;
+
+    let cancelled = false;
+    api<IntegrationRow[]>("/integrations")
+      .then((data) => {
+        if (cancelled) return;
+        setIntegrationStates(data);
+        setLoading(false);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        toast("Failed to load integrations", "error");
+        setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [profile?.workspace_id, toast]);
 
   const toggleIntegration = async (id: string) => {
     const item = integrationStates.find((i) => i.id === id);
@@ -115,14 +128,14 @@ export function IntegrationsContent() {
     setIntegrationStates((prev) => prev.map((i) => (i.id === id ? { ...i, is_active: next } : i)));
     toast(next ? `${platformConfig[item.platform_name]?.label} connected` : `${platformConfig[item.platform_name]?.label} disconnected`);
 
-    const { error } = await supabase.from("integrations").update({ is_active: next }).eq("id", id);
-    if (error) {
+    try {
+      await api("/integrations", { method: "PATCH", body: JSON.stringify({ id, is_active: next }) });
+      await refresh();
+    } catch {
       // Revert on failure
       setIntegrationStates((prev) => prev.map((i) => (i.id === id ? { ...i, is_active: !next } : i)));
       toast("Failed to update integration", "error");
-      return;
     }
-    await refresh();
   };
 
   const openConfigure = (platformName: string) => {
@@ -141,15 +154,14 @@ export function IntegrationsContent() {
     const integration = integrationStates.find((i) => i.platform_name === configuring);
     if (!integration) return;
 
-    const { error } = await supabase.from("integrations").update({ config: configValues }).eq("id", integration.id);
-    if (error) {
+    try {
+      await api("/integrations", { method: "PATCH", body: JSON.stringify({ id: integration.id, config: configValues }) });
+      toast(`${config?.label} configuration saved`);
+      setConfiguring(null);
+      setConfigValues({});
+    } catch {
       toast("Failed to save configuration", "error");
-      return;
     }
-
-    toast(`${config?.label} configuration saved`);
-    setConfiguring(null);
-    setConfigValues({});
   };
 
   const configuringConfig = configuring ? platformConfig[configuring] : null;
@@ -192,7 +204,7 @@ export function IntegrationsContent() {
       </div>
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-        {integrationStates.map((integration) => {
+        {filteredIntegrations.map((integration) => {
           const config = platformConfig[integration.platform_name];
           const Icon = iconMap[integration.platform_name] ?? Zap;
           return (
@@ -214,15 +226,20 @@ export function IntegrationsContent() {
               </div>
               <div className="mt-auto flex items-center justify-between border-t border-slate-200 pt-3 dark:border-slate-700">
                 <button
-                  onClick={() => toggleIntegration(integration.id)}
-                  className={`relative h-6 w-11 rounded-full transition ${integration.is_active ? "bg-indigo-600" : "bg-slate-300 dark:bg-slate-700"}`}
+                  onClick={() => canManage && toggleIntegration(integration.id)}
+                  disabled={!canManage}
+                  className={`relative h-6 w-11 rounded-full transition ${integration.is_active ? "bg-indigo-600" : "bg-slate-300 dark:bg-slate-700"} ${!canManage ? "pointer-events-none opacity-50" : ""}`}
                 >
                   <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white transition-transform ${integration.is_active ? "translate-x-5" : "translate-x-0.5"}`} />
                 </button>
                 {integration.is_active ? (
-                  <button onClick={() => openConfigure(integration.platform_name)} className="inline-flex items-center gap-1 rounded-md px-2.5 py-1.5 text-xs font-medium text-slate-600 transition hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800">
-                    <Settings className="h-3.5 w-3.5" />Configure
-                  </button>
+                  canManage ? (
+                    <button onClick={() => openConfigure(integration.platform_name)} className="inline-flex items-center gap-1 rounded-md px-2.5 py-1.5 text-xs font-medium text-slate-600 transition hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800">
+                      <Settings className="h-3.5 w-3.5" />Configure
+                    </button>
+                  ) : (
+                    <span className="text-xs text-slate-400 dark:text-slate-500">Connected</span>
+                  )
                 ) : (
                   <span className="text-xs text-slate-400 dark:text-slate-500">Not connected</span>
                 )}

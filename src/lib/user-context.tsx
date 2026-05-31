@@ -1,14 +1,23 @@
 "use client";
 
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
-import { createClient } from "@/lib/supabase/client";
-import type { Profile, Workspace, ServerAdmin, Integration } from "@/lib/types";
+import { api } from "@/lib/api";
+import type { Profile, Workspace, ServerAdmin, Integration, WorkspacePreferences } from "@/lib/types";
+
+interface AuthMeResponse {
+  profile: Profile | null;
+  workspace: Workspace | null;
+  serverAdmins: ServerAdmin[];
+  integrations: Integration[];
+  preferences: WorkspacePreferences | null;
+}
 
 interface UserContextValue {
   profile: Profile | null;
   workspace: Workspace | null;
   serverAdmins: ServerAdmin[];
   integrations: Integration[];
+  preferences: WorkspacePreferences | null;
   loading: boolean;
   /** Re-fetch profile + workspace from DB */
   refresh: () => Promise<void>;
@@ -19,6 +28,7 @@ const UserContext = createContext<UserContextValue>({
   workspace: null,
   serverAdmins: [],
   integrations: [],
+  preferences: null,
   loading: true,
   refresh: async () => {},
 });
@@ -32,53 +42,80 @@ export function UserProvider({ children }: { children: ReactNode }) {
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const [serverAdmins, setServerAdmins] = useState<ServerAdmin[]>([]);
   const [integrations, setIntegrations] = useState<Integration[]>([]);
+  const [preferences, setPreferences] = useState<WorkspacePreferences | null>(null);
   const [loading, setLoading] = useState(true);
 
   async function load() {
-    const supabase = createClient();
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
+    try {
+      const data = await api<AuthMeResponse>("/auth/me");
+
+      if (!data.profile) {
+        setProfile(null);
+        setWorkspace(null);
+        setServerAdmins([]);
+        setIntegrations([]);
+        setPreferences(null);
+        setLoading(false);
+        return;
+      }
+
+      setProfile(data.profile);
+      setWorkspace(data.workspace ?? null);
+      setServerAdmins(data.serverAdmins ?? []);
+      setIntegrations(data.integrations ?? []);
+      setPreferences(data.preferences ?? null);
+      setLoading(false);
+    } catch {
       setProfile(null);
       setWorkspace(null);
       setServerAdmins([]);
       setIntegrations([]);
+      setPreferences(null);
       setLoading(false);
-      return;
     }
-
-    // Fetch profile
-    const { data: profileData } = await supabase
-      .from("profiles")
-      .select("*")
-      .eq("auth_user_id", user.id)
-      .single();
-
-    if (!profileData) {
-      setLoading(false);
-      return;
-    }
-
-    setProfile(profileData as Profile);
-
-    // Fetch workspace, server admins, and integrations in parallel
-    const [wsResult, saResult, intResult] = await Promise.all([
-      supabase.from("workspaces").select("*").eq("id", profileData.workspace_id).single(),
-      supabase.from("server_admins").select("*").eq("profile_id", profileData.id),
-      supabase.from("integrations").select("*").eq("workspace_id", profileData.workspace_id),
-    ]);
-
-    setWorkspace((wsResult.data as Workspace) ?? null);
-    setServerAdmins((saResult.data as ServerAdmin[]) ?? []);
-    setIntegrations((intResult.data as Integration[]) ?? []);
-    setLoading(false);
   }
 
   useEffect(() => {
-    load();
+    let cancelled = false;
+
+    api<AuthMeResponse>("/auth/me")
+      .then((data) => {
+        if (cancelled) return;
+
+        if (!data.profile) {
+          setProfile(null);
+          setWorkspace(null);
+          setServerAdmins([]);
+          setIntegrations([]);
+          setPreferences(null);
+          setLoading(false);
+          return;
+        }
+
+        setProfile(data.profile);
+        setWorkspace(data.workspace ?? null);
+        setServerAdmins(data.serverAdmins ?? []);
+        setIntegrations(data.integrations ?? []);
+        setPreferences(data.preferences ?? null);
+        setLoading(false);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setProfile(null);
+        setWorkspace(null);
+        setServerAdmins([]);
+        setIntegrations([]);
+        setPreferences(null);
+        setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   return (
-    <UserContext.Provider value={{ profile, workspace, serverAdmins, integrations, loading, refresh: load }}>
+    <UserContext.Provider value={{ profile, workspace, serverAdmins, integrations, preferences, loading, refresh: load }}>
       {children}
     </UserContext.Provider>
   );

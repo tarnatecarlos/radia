@@ -15,7 +15,7 @@ import {
   X,
 } from "lucide-react";
 import { useUser } from "@/lib/user-context";
-import { createClient } from "@/lib/supabase/client";
+import { api } from "@/lib/api";
 import type { Profile, Task, TaskPriority, TaskStatus } from "@/lib/types";
 import { useToast } from "@/components/ui/toast";
 
@@ -128,8 +128,8 @@ function TaskCard({
 
 export function TasksContent() {
   const { toast } = useToast();
-  const { profile, loading: userLoading } = useUser();
-  const supabase = createClient();
+  const { profile, preferences, loading: userLoading } = useUser();
+  const canCreate = profile?.role === 'creator' || profile?.role === 'moderator' || !!preferences?.members_can_create_tasks;
 
   const [taskList, setTaskList] = useState<Task[]>([]);
   const [profilesList, setProfilesList] = useState<Profile[]>([]);
@@ -154,23 +154,12 @@ export function TasksContent() {
 
     async function fetchData() {
       setDataLoading(true);
-      const [tasksResult, profilesResult] = await Promise.all([
-        supabase
-          .from("tasks")
-          .select("*, assignee:profiles!tasks_assignee_id_fkey(*)")
-          .eq("workspace_id", profile!.workspace_id),
-        supabase
-          .from("profiles")
-          .select("*")
-          .eq("workspace_id", profile!.workspace_id),
+      const [tasks, profiles] = await Promise.all([
+        api<Task[]>("/tasks"),
+        api<Profile[]>("/profiles"),
       ]);
-
-      if (tasksResult.data) {
-        setTaskList(tasksResult.data as Task[]);
-      }
-      if (profilesResult.data) {
-        setProfilesList(profilesResult.data as Profile[]);
-      }
+      setTaskList(tasks);
+      setProfilesList(profiles);
       setDataLoading(false);
     }
 
@@ -216,16 +205,12 @@ export function TasksContent() {
     setDraggingId(null); setOverColumn(null); dragCounterRef.current = {};
     toast(`Task moved to ${columns.find((c) => c.key === targetStatus)?.label}`);
 
-    // Persist to Supabase
-    const { error } = await supabase
-      .from("tasks")
-      .update({ status: targetStatus, updated_at: new Date().toISOString() })
-      .eq("id", taskId);
-
-    if (error) {
+    try {
+      await api("/tasks", { method: "PATCH", body: JSON.stringify({ id: taskId, status: targetStatus }) });
+    } catch {
       toast("Failed to update task status", "error");
     }
-  }, [toast, supabase]);
+  }, [toast]);
 
   const handleDelete = useCallback(async (id: string) => {
     // Optimistic update
@@ -233,48 +218,36 @@ export function TasksContent() {
     setTaskList((prev) => prev.filter((t) => t.id !== id));
     toast("Task deleted");
 
-    // Persist to Supabase
-    const { error } = await supabase
-      .from("tasks")
-      .delete()
-      .eq("id", id);
-
-    if (error) {
+    try {
+      await api("/tasks", { method: "DELETE", body: JSON.stringify({ id }) });
+    } catch {
       toast("Failed to delete task", "error");
       setTaskList(previousTasks);
     }
-  }, [toast, supabase, taskList]);
+  }, [toast, taskList]);
 
   async function handleCreate() {
     if (!newTitle.trim()) { toast("Task title is required", "error"); return; }
     if (!profile) return;
 
-    const assignee = profilesList.find((p) => p.id === newAssignee);
+    try {
+      const data = await api<Task>("/tasks", {
+        method: "POST",
+        body: JSON.stringify({
+          title: newTitle.trim(),
+          description: newDesc.trim() || null,
+          status: newStatus,
+          priority: newPriority,
+          assignee_id: newAssignee || null,
+        }),
+      });
 
-    const insertData: Record<string, unknown> = {
-      workspace_id: profile.workspace_id,
-      title: newTitle.trim(),
-      description: newDesc.trim() || null,
-      status: newStatus,
-      priority: newPriority,
-      creator_id: profile.id,
-      assignee_id: newAssignee || null,
-    };
-
-    const { data, error } = await supabase
-      .from("tasks")
-      .insert(insertData)
-      .select("*, assignee:profiles!tasks_assignee_id_fkey(*)")
-      .single();
-
-    if (error) {
+      setTaskList((prev) => [data, ...prev]);
+      toast("Task created successfully");
+      setShowCreate(false); setNewTitle(""); setNewDesc(""); setNewPriority("MEDIUM"); setNewAssignee(""); setNewStatus("TODO");
+    } catch {
       toast("Failed to create task", "error");
-      return;
     }
-
-    setTaskList((prev) => [data as Task, ...prev]);
-    toast("Task created successfully");
-    setShowCreate(false); setNewTitle(""); setNewDesc(""); setNewPriority("MEDIUM"); setNewAssignee(""); setNewStatus("TODO");
   }
 
   // Loading state
@@ -295,9 +268,11 @@ export function TasksContent() {
       <div className="flex h-full flex-col gap-5">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <h1 className="text-3xl font-bold tracking-tight text-slate-900 dark:text-slate-100">Tasks</h1>
-          <button onClick={() => setShowCreate(true)} className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-indigo-700">
-            <Plus className="h-4 w-4" />Create Task
-          </button>
+          {canCreate && (
+            <button onClick={() => setShowCreate(true)} className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-indigo-700">
+              <Plus className="h-4 w-4" />Create Task
+            </button>
+          )}
         </div>
         <div className="flex flex-1 flex-col items-center justify-center rounded-xl border border-dashed border-slate-300 bg-slate-50/50 px-6 py-16 text-center dark:border-slate-700 dark:bg-slate-900/30">
           <span className="flex h-14 w-14 items-center justify-center rounded-2xl bg-slate-100 dark:bg-slate-800">
@@ -305,11 +280,15 @@ export function TasksContent() {
           </span>
           <h3 className="mt-5 text-base font-semibold text-slate-900 dark:text-slate-100">No tasks yet</h3>
           <p className="mt-2 max-w-sm text-sm leading-relaxed text-slate-500 dark:text-slate-400">
-            Create your first task to start tracking work across your team. Tasks can be organized by status, priority, and assignee.
+            {canCreate
+              ? "Create your first task to start tracking work across your team. Tasks can be organized by status, priority, and assignee."
+              : "No tasks have been assigned to you yet."}
           </p>
-          <button onClick={() => setShowCreate(true)} className="mt-6 inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-5 py-2.5 text-sm font-medium text-white transition hover:bg-indigo-700">
-            <Plus className="h-4 w-4" />Create Your First Task
-          </button>
+          {canCreate && (
+            <button onClick={() => setShowCreate(true)} className="mt-6 inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-5 py-2.5 text-sm font-medium text-white transition hover:bg-indigo-700">
+              <Plus className="h-4 w-4" />Create Your First Task
+            </button>
+          )}
         </div>
       </div>
     );
@@ -324,9 +303,11 @@ export function TasksContent() {
     <div className="flex h-full flex-col gap-5">
       <motion.div initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.35 }} className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <h1 className="text-3xl font-bold tracking-tight text-slate-900 dark:text-slate-100">Tasks</h1>
-        <button onClick={() => setShowCreate(true)} className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-indigo-700">
-          <Plus className="h-4 w-4" />Create Task
-        </button>
+        {canCreate && (
+          <button onClick={() => setShowCreate(true)} className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-indigo-700">
+            <Plus className="h-4 w-4" />Create Task
+          </button>
+        )}
       </motion.div>
 
       <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3, delay: 0.05 }} className="inline-flex w-fit items-center gap-1 rounded-lg border border-slate-200 bg-slate-100 p-1 dark:border-slate-700 dark:bg-slate-800">

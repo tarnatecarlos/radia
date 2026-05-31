@@ -121,3 +121,13 @@ export interface OrgNode extends Profile {
   children: OrgNode[];
   depth: number;
 }
+
+export interface WorkspacePreferences {
+  id: string;
+  workspace_id: string;
+  members_can_create_tasks: boolean;
+  members_can_create_sops: boolean;
+  members_can_create_courses: boolean;
+  members_can_manage_integrations: boolean;
+  allowed_integrations: string[];
+}

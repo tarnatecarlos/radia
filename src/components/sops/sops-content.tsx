@@ -1,10 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Edit3, FileText, Plus, Save, Search, Tag, Trash2, X } from "lucide-react";
 import { useUser } from "@/lib/user-context";
-import { createClient } from "@/lib/supabase/client";
+import { api } from "@/lib/api";
 import type { SOP } from "@/lib/types";
 import { useToast } from "@/components/ui/toast";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -25,7 +25,8 @@ function categoryTone(category: string) {
 
 export function SOPsContent() {
   const { toast } = useToast();
-  const { profile } = useUser();
+  const { profile, preferences } = useUser();
+  const canCreate = profile?.role === 'creator' || profile?.role === 'moderator' || !!preferences?.members_can_create_sops;
   const [sopList, setSopList] = useState<SOP[]>([]);
   const [profileNames, setProfileNames] = useState<Record<string, string>>({});
   const [search, setSearch] = useState("");
@@ -47,42 +48,32 @@ export function SOPsContent() {
   // Delete
   const [deleteId, setDeleteId] = useState<string | null>(null);
 
-  const fetchSOPs = useCallback(async () => {
-    if (!profile) return;
-    const supabase = createClient();
-    const { data } = await supabase
-      .from("sops")
-      .select("*")
-      .eq("workspace_id", profile.workspace_id)
-      .order("updated_at", { ascending: false });
-    if (data) {
-      setSopList(data as SOP[]);
-      if (!selectedId && data.length > 0) {
-        setSelectedId(data[0].id);
-      }
-    }
-  }, [profile, selectedId]);
-
-  const fetchProfiles = useCallback(async () => {
-    if (!profile) return;
-    const supabase = createClient();
-    const { data: profilesData } = await supabase
-      .from("profiles")
-      .select("id, first_name")
-      .eq("workspace_id", profile.workspace_id);
-    if (profilesData) {
-      const map: Record<string, string> = {};
-      for (const p of profilesData) {
-        map[p.id] = p.first_name;
-      }
-      setProfileNames(map);
-    }
-  }, [profile]);
-
   useEffect(() => {
-    fetchSOPs();
-    fetchProfiles();
-  }, [fetchSOPs, fetchProfiles]);
+    if (!profile) return;
+
+    let cancelled = false;
+    Promise.all([
+      api<SOP[]>("/sops"),
+      api<{ id: string; first_name: string }[]>("/profiles?fields=id,first_name"),
+    ])
+      .then(([sops, profiles]) => {
+        if (cancelled) return;
+        const map: Record<string, string> = {};
+        for (const item of profiles) {
+          map[item.id] = item.first_name;
+        }
+        setSopList(sops);
+        setSelectedId((current) => current ?? sops[0]?.id ?? null);
+        setProfileNames(map);
+      })
+      .catch(() => {
+        if (!cancelled) toast("Failed to load SOPs", "error");
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [profile, toast]);
 
   const filtered = useMemo(() => {
     return sopList.filter((sop) => {
@@ -98,22 +89,22 @@ export function SOPsContent() {
   async function handleCreate() {
     if (!profile) return;
     if (!newTitle.trim()) { toast("Title is required", "error"); return; }
-    const supabase = createClient();
-    const { data, error } = await supabase.from("sops").insert({
-      workspace_id: profile.workspace_id,
-      title: newTitle.trim(),
-      content: newContent.trim() || `# ${newTitle.trim()}\n\nContent goes here...`,
-      category: newCategory,
-      version: 1,
-      last_updated_by: profile.id,
-    }).select().single();
-    if (error) { toast("Failed to create SOP", "error"); return; }
-    if (data) {
-      setSopList((prev) => [data as SOP, ...prev]);
+    try {
+      const data = await api<SOP>("/sops", {
+        method: "POST",
+        body: JSON.stringify({
+          title: newTitle.trim(),
+          content: newContent.trim() || `# ${newTitle.trim()}\n\nContent goes here...`,
+          category: newCategory,
+        }),
+      });
+      setSopList((prev) => [data, ...prev]);
       setSelectedId(data.id);
+      toast("SOP created successfully");
+      setShowCreate(false); setNewTitle(""); setNewContent(""); setNewCategory("General");
+    } catch {
+      toast("Failed to create SOP", "error");
     }
-    toast("SOP created successfully");
-    setShowCreate(false); setNewTitle(""); setNewContent(""); setNewCategory("General");
   }
 
   function startEdit(sop: SOP) {
@@ -128,34 +119,39 @@ export function SOPsContent() {
     if (!editTitle.trim()) { toast("Title is required", "error"); return; }
     const editedSop = sopList.find((s) => s.id === editingId);
     if (!editedSop) return;
-    const supabase = createClient();
-    const { error } = await supabase.from("sops").update({
-      title: editTitle.trim(),
-      content: editContent,
-      category: editCategory,
-      version: editedSop.version + 1,
-      last_updated_by: profile.id,
-      updated_at: new Date().toISOString(),
-    }).eq("id", editingId!);
-    if (error) { toast("Failed to update SOP", "error"); return; }
-    setSopList((prev) => prev.map((s) =>
-      s.id === editingId
-        ? { ...s, title: editTitle.trim(), content: editContent, category: editCategory, version: s.version + 1, updated_at: new Date().toISOString(), last_updated_by: profile.id }
-        : s
-    ));
-    toast("SOP updated successfully");
-    setEditingId(null);
+    try {
+      await api("/sops", {
+        method: "PATCH",
+        body: JSON.stringify({
+          id: editingId,
+          title: editTitle.trim(),
+          content: editContent,
+          category: editCategory,
+        }),
+      });
+      setSopList((prev) => prev.map((s) =>
+        s.id === editingId
+          ? { ...s, title: editTitle.trim(), content: editContent, category: editCategory, version: s.version + 1, updated_at: new Date().toISOString(), last_updated_by: profile.id }
+          : s
+      ));
+      toast("SOP updated successfully");
+      setEditingId(null);
+    } catch {
+      toast("Failed to update SOP", "error");
+    }
   }
 
   async function handleDelete() {
     if (!deleteId) return;
-    const supabase = createClient();
-    const { error } = await supabase.from("sops").delete().eq("id", deleteId);
-    if (error) { toast("Failed to delete SOP", "error"); return; }
-    setSopList((prev) => prev.filter((s) => s.id !== deleteId));
-    if (selectedId === deleteId) setSelectedId(null);
-    toast("SOP deleted");
-    setDeleteId(null);
+    try {
+      await api("/sops", { method: "DELETE", body: JSON.stringify({ id: deleteId }) });
+      setSopList((prev) => prev.filter((s) => s.id !== deleteId));
+      if (selectedId === deleteId) setSelectedId(null);
+      toast("SOP deleted");
+      setDeleteId(null);
+    } catch {
+      toast("Failed to delete SOP", "error");
+    }
   }
 
   if (sopList.length === 0 && !search) {
@@ -175,9 +171,11 @@ export function SOPsContent() {
           <p className="mt-2 max-w-sm text-sm leading-relaxed text-slate-500 dark:text-slate-400">
             Standard Operating Procedures keep your team aligned. Create your first document to build your knowledge base.
           </p>
-          <button onClick={() => setShowCreate(true)} className="mt-6 inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-5 py-2.5 text-sm font-medium text-white transition hover:bg-indigo-700">
-            <Plus className="h-4 w-4" />Create Your First SOP
-          </button>
+          {canCreate && (
+            <button onClick={() => setShowCreate(true)} className="mt-6 inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-5 py-2.5 text-sm font-medium text-white transition hover:bg-indigo-700">
+              <Plus className="h-4 w-4" />Create Your First SOP
+            </button>
+          )}
         </div>
       </div>
     );
@@ -190,9 +188,11 @@ export function SOPsContent() {
           <h1 className="text-3xl font-bold tracking-tight text-slate-900 dark:text-slate-100">Standard Operating Procedures</h1>
           <p className="mt-1 text-sm text-slate-400 dark:text-slate-500">{sopList.length} documents in the knowledge base</p>
         </div>
-        <button onClick={() => setShowCreate(true)} className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-indigo-700">
-          <Plus className="h-4 w-4" />New SOP
-        </button>
+        {canCreate && (
+          <button onClick={() => setShowCreate(true)} className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-indigo-700">
+            <Plus className="h-4 w-4" />New SOP
+          </button>
+        )}
       </div>
 
       <div className="relative max-w-lg">
@@ -255,14 +255,16 @@ export function SOPsContent() {
                 <div className="flex flex-wrap items-center gap-2">
                   <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${categoryTone(selected.category)}`}>{selected.category}</span>
                   <span className="font-mono text-xs text-slate-400 dark:text-slate-500">Version {selected.version}</span>
-                  <div className="ml-auto flex gap-1">
-                    <button onClick={() => startEdit(selected)} className="rounded-md p-1.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-800 dark:hover:text-slate-200">
-                      <Edit3 className="h-4 w-4" />
-                    </button>
-                    <button onClick={() => setDeleteId(selected.id)} className="rounded-md p-1.5 text-slate-400 transition hover:bg-rose-50 hover:text-rose-500 dark:hover:bg-rose-500/10">
-                      <Trash2 className="h-4 w-4" />
-                    </button>
-                  </div>
+                  {canCreate && (
+                    <div className="ml-auto flex gap-1">
+                      <button onClick={() => startEdit(selected)} className="rounded-md p-1.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-800 dark:hover:text-slate-200">
+                        <Edit3 className="h-4 w-4" />
+                      </button>
+                      <button onClick={() => setDeleteId(selected.id)} className="rounded-md p-1.5 text-slate-400 transition hover:bg-rose-50 hover:text-rose-500 dark:hover:bg-rose-500/10">
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
+                  )}
                 </div>
                 <h2 className="mt-3 text-2xl font-bold tracking-tight text-slate-900 dark:text-slate-100">{selected.title}</h2>
                 <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">

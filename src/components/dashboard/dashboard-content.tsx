@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -15,10 +15,10 @@ import {
   Users,
   X,
 } from "lucide-react";
-import type { Task, TaskPriority, TaskStatus, Profile, Course, CourseEnrollment } from "@/lib/types";
+import type { Task, TaskPriority, Profile, Course, CourseEnrollment, SOP } from "@/lib/types";
 import { useToast } from "@/components/ui/toast";
 import { useUser } from "@/lib/user-context";
-import { createClient } from "@/lib/supabase/client";
+import { api } from "@/lib/api";
 
 function formatDate(date: Date) {
   return date.toLocaleDateString("en-US", {
@@ -106,7 +106,7 @@ type ModalType = "task" | "employee" | "sop" | null;
 export function DashboardContent() {
   const router = useRouter();
   const { toast } = useToast();
-  const { profile, loading: userLoading } = useUser();
+  const { profile, preferences, loading: userLoading } = useUser();
   const currentDate = formatDate(new Date());
 
   const [taskList, setTaskList] = useState<Task[]>([]);
@@ -134,47 +134,36 @@ export function DashboardContent() {
   const [sopTitle, setSopTitle] = useState("");
   const [sopCategory, setSopCategory] = useState("General");
 
-  const fetchData = useCallback(async () => {
-    if (!profile) return;
-    const supabase = createClient();
-    setDataLoading(true);
-
-    const [profilesRes, tasksRes, sopsRes, coursesRes, enrollmentsRes] = await Promise.all([
-      supabase
-        .from("profiles")
-        .select("*")
-        .eq("workspace_id", profile.workspace_id),
-      supabase
-        .from("tasks")
-        .select("*, assignee:profiles!tasks_assignee_id_fkey(*)")
-        .eq("workspace_id", profile.workspace_id)
-        .order("updated_at", { ascending: false }),
-      supabase
-        .from("sops")
-        .select("id", { count: "exact", head: true })
-        .eq("workspace_id", profile.workspace_id),
-      supabase
-        .from("courses")
-        .select("*, lessons(*)")
-        .eq("workspace_id", profile.workspace_id),
-      supabase
-        .from("course_enrollments")
-        .select("*"),
-    ]);
-
-    setProfilesList((profilesRes.data as Profile[]) ?? []);
-    setTaskList((tasksRes.data as Task[]) ?? []);
-    setSopCount(sopsRes.count ?? 0);
-    setCoursesList((coursesRes.data as Course[]) ?? []);
-    setEnrollmentsList((enrollmentsRes.data as CourseEnrollment[]) ?? []);
-    setDataLoading(false);
-  }, [profile]);
-
   useEffect(() => {
-    if (!userLoading && profile) {
-      fetchData();
-    }
-  }, [userLoading, profile, fetchData]);
+    if (userLoading || !profile) return;
+
+    let cancelled = false;
+    Promise.all([
+      api<Profile[]>("/profiles"),
+      api<Task[]>("/tasks"),
+      api<SOP[]>("/sops"),
+      api<Course[]>("/courses"),
+      api<CourseEnrollment[]>("/enrollments"),
+    ])
+      .then(([profiles, tasks, sopsData, courses, enrollments]) => {
+        if (cancelled) return;
+        setProfilesList(profiles);
+        setTaskList(tasks);
+        setSopCount(sopsData.length);
+        setCoursesList(courses);
+        setEnrollmentsList(enrollments);
+        setDataLoading(false);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        toast("Failed to load dashboard", "error");
+        setDataLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [userLoading, profile, toast]);
 
   if (userLoading || dataLoading) {
     return (
@@ -183,6 +172,8 @@ export function DashboardContent() {
       </div>
     );
   }
+
+  const isAdmin = profile?.role === 'creator' || profile?.role === 'moderator';
 
   const activeTasks = taskList.filter((t) => t.status !== "DONE").length;
   const onboardingRows = getOnboardingRows(profilesList, enrollmentsList, coursesList);
@@ -200,6 +191,30 @@ export function DashboardContent() {
     { label: "SOPs Published", value: sopCount, icon: BookOpen, tone: "text-violet-600 bg-violet-50", sub: "Updated recently" },
   ];
 
+  // Member-specific computed data
+  const myTasks = taskList.filter(t => t.assignee_id === profile?.id)
+    .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
+  const myActiveTasks = myTasks.filter(t => t.status !== 'DONE').length;
+  const myCompletedTasks = myTasks.filter(t => t.status === 'DONE').length;
+  const myOnboardingProgress = (() => {
+    const myEnrollments = enrollmentsList.filter(e => e.profile_id === profile?.id);
+    let total = 0, completed = 0;
+    for (const enrollment of myEnrollments) {
+      const course = coursesList.find(c => c.id === enrollment.course_id);
+      if (!course?.lessons) continue;
+      total += course.lessons.length;
+      completed += enrollment.completed_lessons.length;
+    }
+    return total > 0 ? Math.round((completed / total) * 100) : 0;
+  })();
+
+  const memberStats = [
+    { label: "My Active Tasks", value: myActiveTasks, icon: CheckSquare, tone: "text-sky-600 bg-sky-50", sub: `${myActiveTasks} remaining` },
+    { label: "Completed Tasks", value: myCompletedTasks, icon: CheckSquare, tone: "text-emerald-600 bg-emerald-50", sub: `${myCompletedTasks} done` },
+    { label: "My Onboarding", value: `${myOnboardingProgress}%`, icon: GraduationCap, tone: "text-amber-600 bg-amber-50", sub: "Progress" },
+    { label: "Available SOPs", value: sopCount, icon: BookOpen, tone: "text-violet-600 bg-violet-50", sub: "Reference docs" },
+  ];
+
   function resetForms() {
     setTaskTitle(""); setTaskDesc(""); setTaskPriority("MEDIUM"); setTaskAssignee("");
     setEmpFirst(""); setEmpLast(""); setEmpEmail(""); setEmpTitle(""); setEmpManager("");
@@ -210,29 +225,24 @@ export function DashboardContent() {
     if (!taskTitle.trim()) { toast("Task title is required", "error"); return; }
     if (!profile) return;
 
-    const supabase = createClient();
-    const { data, error } = await supabase
-      .from("tasks")
-      .insert({
-        workspace_id: profile.workspace_id,
-        title: taskTitle.trim(),
-        description: taskDesc.trim() || null,
-        status: "TODO",
-        priority: taskPriority,
-        creator_id: profile.id,
-        assignee_id: taskAssignee || null,
-      })
-      .select("*, assignee:profiles!tasks_assignee_id_fkey(*)")
-      .single();
+    try {
+      const data = await api<Task>("/tasks", {
+        method: "POST",
+        body: JSON.stringify({
+          title: taskTitle.trim(),
+          description: taskDesc.trim() || null,
+          status: "TODO",
+          priority: taskPriority,
+          assignee_id: taskAssignee || null,
+        }),
+      });
 
-    if (error) {
+      setTaskList((prev) => [data, ...prev]);
+      toast("Task created successfully");
+      setModal(null); resetForms();
+    } catch {
       toast("Failed to create task", "error");
-      return;
     }
-
-    setTaskList((prev) => [data as Task, ...prev]);
-    toast("Task created successfully");
-    setModal(null); resetForms();
   }
 
   async function handleAddEmployee() {
@@ -241,155 +251,237 @@ export function DashboardContent() {
     }
     if (!profile) return;
 
-    const supabase = createClient();
-    const { data, error } = await supabase
-      .from("profiles")
-      .insert({
-        workspace_id: profile.workspace_id,
-        email: empEmail.trim(),
-        first_name: empFirst.trim(),
-        last_name: empLast.trim(),
-        role: "user",
-        title: empTitle.trim() || null,
-        manager_id: empManager || null,
-        onboarding_completed: false,
-        started_date: new Date().toISOString().split("T")[0],
-      })
-      .select()
-      .single();
+    try {
+      const data = await api<Profile>("/profiles", {
+        method: "POST",
+        body: JSON.stringify({
+          email: empEmail.trim(),
+          first_name: empFirst.trim(),
+          last_name: empLast.trim(),
+          role: "user",
+          title: empTitle.trim() || null,
+          manager_id: empManager || null,
+        }),
+      });
 
-    if (error) {
+      setProfilesList((prev) => [...prev, data]);
+      toast(`${empFirst} ${empLast} added successfully`);
+      setModal(null); resetForms();
+    } catch {
       toast("Failed to add employee", "error");
-      return;
     }
-
-    setProfilesList((prev) => [...prev, data as Profile]);
-    toast(`${empFirst} ${empLast} added successfully`);
-    setModal(null); resetForms();
   }
 
   async function handleCreateSOP() {
     if (!sopTitle.trim()) { toast("SOP title is required", "error"); return; }
     if (!profile) return;
 
-    const supabase = createClient();
-    const { error } = await supabase
-      .from("sops")
-      .insert({
-        workspace_id: profile.workspace_id,
-        title: sopTitle.trim(),
-        content: "",
-        category: sopCategory,
-        version: 1,
-        last_updated_by: profile.id,
+    try {
+      await api("/sops", {
+        method: "POST",
+        body: JSON.stringify({
+          title: sopTitle.trim(),
+          content: "",
+          category: sopCategory,
+        }),
       });
 
-    if (error) {
+      toast("SOP created successfully");
+      setModal(null); resetForms();
+      router.push("/dashboard/sops");
+    } catch {
       toast("Failed to create SOP", "error");
-      return;
     }
-
-    toast("SOP created successfully");
-    setModal(null); resetForms();
-    router.push("/dashboard/sops");
   }
 
   return (
     <div className="space-y-6 pb-5">
-      <motion.div variants={cardVariants} initial="hidden" animate="visible" custom={0}>
-        <h1 className="text-3xl font-bold tracking-tight text-slate-900 dark:text-slate-100">
-          Welcome back, {profile?.first_name ?? "there"}
-        </h1>
-        <p className="mt-1 text-sm text-slate-400 dark:text-slate-500">{currentDate}</p>
-      </motion.div>
+      {isAdmin ? (
+        <>
+          {/* Admin Dashboard */}
+          <motion.div variants={cardVariants} initial="hidden" animate="visible" custom={0}>
+            <h1 className="text-3xl font-bold tracking-tight text-slate-900 dark:text-slate-100">
+              Welcome back, {profile?.first_name ?? "there"}
+            </h1>
+            <p className="mt-1 text-sm text-slate-400 dark:text-slate-500">{currentDate}</p>
+          </motion.div>
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {stats.map((stat, index) => {
-          const Icon = stat.icon;
-          return (
-            <motion.div key={stat.label} variants={cardVariants} initial="hidden" animate="visible" custom={index + 1} className="radia-card radia-card-hover p-5">
-              <div className="flex items-start justify-between">
-                <span className="text-sm font-medium text-slate-600 dark:text-slate-300">{stat.label}</span>
-                <span className={`flex h-8 w-8 items-center justify-center rounded-lg ${stat.tone}`}><Icon className="h-4 w-4" /></span>
-              </div>
-              <p className="mt-2 font-mono text-3xl font-bold tracking-tight text-slate-900 dark:text-slate-100">{stat.value}</p>
-              <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">{stat.sub}</p>
-            </motion.div>
-          );
-        })}
-      </div>
-
-      <div className="grid grid-cols-1 gap-5 lg:grid-cols-3">
-        <motion.div variants={cardVariants} initial="hidden" animate="visible" custom={6} className="radia-card p-6 lg:col-span-2">
-          <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100">Recent Activity</h2>
-          <div className="mt-4 space-y-1">
-            {recentActivity.map((item) => (
-              <div key={item.id} className="flex items-start gap-3 rounded-lg p-2 hover:bg-slate-50 dark:hover:bg-slate-800">
-                {item.assignee && (
-                  <span className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full text-xs font-semibold text-white ${getAvatarColor(item.assignee.id)}`}>
-                    {getInitials(item.assignee.first_name, item.assignee.last_name)}
-                  </span>
-                )}
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm leading-relaxed text-slate-700 dark:text-slate-200">{item.text}</p>
-                  <p className="mt-0.5 flex items-center gap-1 text-xs text-slate-400 dark:text-slate-500">
-                    <Clock className="h-3 w-3" />{timeAgo(item.timestamp)}
-                  </p>
-                </div>
-              </div>
-            ))}
-          </div>
-        </motion.div>
-
-        <motion.div variants={cardVariants} initial="hidden" animate="visible" custom={7} className="radia-card p-6">
-          <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100">Onboarding Overview</h2>
-          <div className="mt-4 space-y-5">
-            {onboardingRows.map((row) => (
-              <div key={row.profile.id}>
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <span className={`flex h-7 w-7 items-center justify-center rounded-full text-[10px] font-semibold text-white ${getAvatarColor(row.profile.id)}`}>
-                      {getInitials(row.profile.first_name, row.profile.last_name)}
-                    </span>
-                    <span className="text-sm font-medium text-slate-700 dark:text-slate-200">
-                      {row.profile.first_name} {row.profile.last_name}
-                    </span>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            {stats.map((stat, index) => {
+              const Icon = stat.icon;
+              return (
+                <motion.div key={stat.label} variants={cardVariants} initial="hidden" animate="visible" custom={index + 1} className="radia-card radia-card-hover p-5">
+                  <div className="flex items-start justify-between">
+                    <span className="text-sm font-medium text-slate-600 dark:text-slate-300">{stat.label}</span>
+                    <span className={`flex h-8 w-8 items-center justify-center rounded-lg ${stat.tone}`}><Icon className="h-4 w-4" /></span>
                   </div>
-                  <span className="font-mono text-xs font-semibold text-slate-500 dark:text-slate-300">{row.progress}%</span>
-                </div>
-                <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
-                  <motion.div className="h-full rounded-full bg-indigo-600" initial={{ width: 0 }} animate={{ width: `${row.progress}%` }} transition={{ duration: 0.7, delay: 0.2, ease: "easeOut" }} />
-                </div>
-                <p className="mt-1 text-[11px] text-slate-400 dark:text-slate-500">{row.completedLessons} of {row.totalLessons} lessons completed</p>
-              </div>
-            ))}
+                  <p className="mt-2 font-mono text-3xl font-bold tracking-tight text-slate-900 dark:text-slate-100">{stat.value}</p>
+                  <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">{stat.sub}</p>
+                </motion.div>
+              );
+            })}
           </div>
-        </motion.div>
-      </div>
 
-      <motion.div variants={cardVariants} initial="hidden" animate="visible" custom={8} className="flex flex-wrap gap-3">
-        {[
-          { label: "Create Task", icon: Plus, primary: true, action: () => setModal("task") },
-          { label: "Add Employee", icon: UserPlus, primary: false, action: () => setModal("employee") },
-          { label: "New SOP", icon: FileText, primary: false, action: () => setModal("sop") },
-        ].map((action) => {
-          const Icon = action.icon;
-          return (
+          <div className="grid grid-cols-1 gap-5 lg:grid-cols-3">
+            <motion.div variants={cardVariants} initial="hidden" animate="visible" custom={6} className="radia-card p-6 lg:col-span-2">
+              <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100">Recent Activity</h2>
+              <div className="mt-4 space-y-1">
+                {recentActivity.map((item) => (
+                  <div key={item.id} className="flex items-start gap-3 rounded-lg p-2 hover:bg-slate-50 dark:hover:bg-slate-800">
+                    {item.assignee && (
+                      <span className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full text-xs font-semibold text-white ${getAvatarColor(item.assignee.id)}`}>
+                        {getInitials(item.assignee.first_name, item.assignee.last_name)}
+                      </span>
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm leading-relaxed text-slate-700 dark:text-slate-200">{item.text}</p>
+                      <p className="mt-0.5 flex items-center gap-1 text-xs text-slate-400 dark:text-slate-500">
+                        <Clock className="h-3 w-3" />{timeAgo(item.timestamp)}
+                      </p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </motion.div>
+
+            <motion.div variants={cardVariants} initial="hidden" animate="visible" custom={7} className="radia-card p-6">
+              <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100">Onboarding Overview</h2>
+              <div className="mt-4 space-y-5">
+                {onboardingRows.map((row) => (
+                  <div key={row.profile.id}>
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <span className={`flex h-7 w-7 items-center justify-center rounded-full text-[10px] font-semibold text-white ${getAvatarColor(row.profile.id)}`}>
+                          {getInitials(row.profile.first_name, row.profile.last_name)}
+                        </span>
+                        <span className="text-sm font-medium text-slate-700 dark:text-slate-200">
+                          {row.profile.first_name} {row.profile.last_name}
+                        </span>
+                      </div>
+                      <span className="font-mono text-xs font-semibold text-slate-500 dark:text-slate-300">{row.progress}%</span>
+                    </div>
+                    <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
+                      <motion.div className="h-full rounded-full bg-indigo-600" initial={{ width: 0 }} animate={{ width: `${row.progress}%` }} transition={{ duration: 0.7, delay: 0.2, ease: "easeOut" }} />
+                    </div>
+                    <p className="mt-1 text-[11px] text-slate-400 dark:text-slate-500">{row.completedLessons} of {row.totalLessons} lessons completed</p>
+                  </div>
+                ))}
+              </div>
+            </motion.div>
+          </div>
+
+          <motion.div variants={cardVariants} initial="hidden" animate="visible" custom={8} className="flex flex-wrap gap-3">
+            {[
+              { label: "Create Task", icon: Plus, primary: true, action: () => setModal("task") },
+              { label: "Add Employee", icon: UserPlus, primary: false, action: () => setModal("employee") },
+              { label: "New SOP", icon: FileText, primary: false, action: () => setModal("sop") },
+            ].map((action) => {
+              const Icon = action.icon;
+              return (
+                <button
+                  key={action.label}
+                  onClick={action.action}
+                  className={`group inline-flex items-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium transition ${
+                    action.primary
+                      ? "bg-indigo-600 text-white hover:bg-indigo-700"
+                      : "border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
+                  }`}
+                >
+                  <Icon className="h-4 w-4" />{action.label}
+                  <ArrowRight className="h-3.5 w-3.5 opacity-0 transition group-hover:translate-x-0.5 group-hover:opacity-100" />
+                </button>
+              );
+            })}
+          </motion.div>
+        </>
+      ) : (
+        <>
+          {/* Member Dashboard */}
+          <motion.div variants={cardVariants} initial="hidden" animate="visible" custom={0}>
+            <h1 className="text-3xl font-bold tracking-tight text-slate-900 dark:text-slate-100">
+              Welcome, {profile?.first_name ?? "there"}
+            </h1>
+            <p className="mt-1 text-sm text-slate-400 dark:text-slate-500">{currentDate}</p>
+          </motion.div>
+
+          {/* Member stat cards */}
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            {memberStats.map((stat, index) => {
+              const Icon = stat.icon;
+              return (
+                <motion.div key={stat.label} variants={cardVariants} initial="hidden" animate="visible" custom={index + 1} className="radia-card radia-card-hover p-5">
+                  <div className="flex items-start justify-between">
+                    <span className="text-sm font-medium text-slate-600 dark:text-slate-300">{stat.label}</span>
+                    <span className={`flex h-8 w-8 items-center justify-center rounded-lg ${stat.tone}`}><Icon className="h-4 w-4" /></span>
+                  </div>
+                  <p className="mt-2 font-mono text-3xl font-bold tracking-tight text-slate-900 dark:text-slate-100">{stat.value}</p>
+                  <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">{stat.sub}</p>
+                </motion.div>
+              );
+            })}
+          </div>
+
+          {/* My Recent Tasks */}
+          <motion.div variants={cardVariants} initial="hidden" animate="visible" custom={5} className="radia-card p-6">
+            <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100">My Recent Tasks</h2>
+            <div className="mt-4 space-y-2">
+              {myTasks.slice(0, 5).map((task) => (
+                <div key={task.id} className="flex items-center gap-3 rounded-lg p-2 hover:bg-slate-50 dark:hover:bg-slate-800">
+                  <span className={`h-2.5 w-2.5 flex-shrink-0 rounded-full ${task.priority === 'HIGH' ? 'bg-rose-600' : task.priority === 'MEDIUM' ? 'bg-amber-600' : 'bg-emerald-600'}`} />
+                  <span className="flex-1 truncate text-sm text-slate-700 dark:text-slate-200">{task.title}</span>
+                  <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
+                    task.status === 'DONE' ? 'bg-emerald-50 text-emerald-700' :
+                    task.status === 'IN_PROGRESS' ? 'bg-sky-50 text-sky-700' :
+                    task.status === 'REVIEW' ? 'bg-amber-50 text-amber-700' :
+                    'bg-slate-100 text-slate-600'
+                  }`}>
+                    {task.status === 'IN_PROGRESS' ? 'In Progress' : task.status === 'DONE' ? 'Done' : task.status === 'REVIEW' ? 'Review' : 'To Do'}
+                  </span>
+                </div>
+              ))}
+              {myTasks.length === 0 && (
+                <p className="py-4 text-center text-sm text-slate-400">No tasks assigned to you yet.</p>
+              )}
+            </div>
+          </motion.div>
+
+          {/* Quick actions */}
+          <motion.div variants={cardVariants} initial="hidden" animate="visible" custom={6} className="flex flex-wrap gap-3">
             <button
-              key={action.label}
-              onClick={action.action}
-              className={`group inline-flex items-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium transition ${
-                action.primary
-                  ? "bg-indigo-600 text-white hover:bg-indigo-700"
-                  : "border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
-              }`}
+              onClick={() => router.push("/dashboard/tasks")}
+              className="group inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
             >
-              <Icon className="h-4 w-4" />{action.label}
+              <CheckSquare className="h-4 w-4" />View My Tasks
               <ArrowRight className="h-3.5 w-3.5 opacity-0 transition group-hover:translate-x-0.5 group-hover:opacity-100" />
             </button>
-          );
-        })}
-      </motion.div>
+            <button
+              onClick={() => router.push("/dashboard/onboarding")}
+              className="group inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
+            >
+              <GraduationCap className="h-4 w-4" />Continue Onboarding
+              <ArrowRight className="h-3.5 w-3.5 opacity-0 transition group-hover:translate-x-0.5 group-hover:opacity-100" />
+            </button>
+            {preferences?.members_can_create_tasks && (
+              <button
+                onClick={() => setModal("task")}
+                className="group inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-indigo-700"
+              >
+                <Plus className="h-4 w-4" />Create Task
+                <ArrowRight className="h-3.5 w-3.5 opacity-0 transition group-hover:translate-x-0.5 group-hover:opacity-100" />
+              </button>
+            )}
+            {preferences?.members_can_create_sops && (
+              <button
+                onClick={() => setModal("sop")}
+                className="group inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
+              >
+                <FileText className="h-4 w-4" />New SOP
+                <ArrowRight className="h-3.5 w-3.5 opacity-0 transition group-hover:translate-x-0.5 group-hover:opacity-100" />
+              </button>
+            )}
+          </motion.div>
+        </>
+      )}
 
       {/* Modals */}
       <AnimatePresence>

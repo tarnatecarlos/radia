@@ -5,7 +5,7 @@ import {
   Activity, AlertTriangle, Building, Clock, Database, HardDrive, Shield, UserCheck, UserX,
 } from "lucide-react";
 import { useUser } from "@/lib/user-context";
-import { createClient } from "@/lib/supabase/client";
+import { api } from "@/lib/api";
 import { getRoleBadgeColor, getRoleLabel } from "@/lib/utils/roles";
 import type { AdminRequest, AdminRequestStatus, ServerAdmin, Profile } from "@/lib/types";
 import { useToast } from "@/components/ui/toast";
@@ -45,7 +45,6 @@ function StatusPill({ status }: { status: AdminRequestStatus }) {
 export function AdminContent() {
   const { toast } = useToast();
   const { profile, workspace } = useUser();
-  const supabase = createClient();
 
   const [requests, setRequests] = useState<AdminRequestWithProfile[]>([]);
   const [admins, setAdmins] = useState<ServerAdminWithProfile[]>([]);
@@ -56,27 +55,23 @@ export function AdminContent() {
   const [showPauseConfirm, setShowPauseConfirm] = useState(false);
 
   const workspaceName = workspace?.name ?? "Workspace";
-  const actorName = profile ? `${profile.first_name} ${profile.last_name}` : "Unknown";
 
   useEffect(() => {
     if (!profile) return;
 
     async function fetchData() {
-      const [reqResult, adminResult, logResult, profileResult] = await Promise.all([
-        supabase.from("admin_requests").select("*, profile:profiles(*)").order("created_at", { ascending: false }),
-        supabase.from("server_admins").select("*, profile:profiles(*)").order("granted_at"),
-        supabase.from("audit_log").select("*").eq("workspace_id", profile!.workspace_id).order("created_at", { ascending: false }).limit(20),
-        supabase.from("profiles").select("*").eq("workspace_id", profile!.workspace_id),
+      const [adminData, profiles] = await Promise.all([
+        api<{ requests: AdminRequestWithProfile[]; admins: ServerAdminWithProfile[]; auditLog: AuditLogEntry[] }>("/admin"),
+        api<Profile[]>("/profiles"),
       ]);
 
-      if (reqResult.data) setRequests(reqResult.data as AdminRequestWithProfile[]);
-      if (adminResult.data) setAdmins(adminResult.data as ServerAdminWithProfile[]);
-      if (logResult.data) setAuditLog(logResult.data as AuditLogEntry[]);
-      if (profileResult.data) {
-        const map: Record<string, Profile> = {};
-        (profileResult.data as Profile[]).forEach((p) => { map[p.id] = p; });
-        setProfileMap(map);
-      }
+      setRequests(adminData.requests);
+      setAdmins(adminData.admins);
+      setAuditLog(adminData.auditLog);
+
+      const map: Record<string, Profile> = {};
+      profiles.forEach((p) => { map[p.id] = p; });
+      setProfileMap(map);
     }
 
     fetchData();
@@ -107,18 +102,7 @@ export function AdminContent() {
     const request = requests.find((r) => r.id === requestId);
     const name = request ? getProfileName(request) : "User";
 
-    await supabase.from("admin_requests").update({
-      status: "approved",
-      reviewed_at: new Date().toISOString(),
-      reviewed_by: profile.id,
-    }).eq("id", requestId);
-
-    await supabase.from("audit_log").insert({
-      workspace_id: profile.workspace_id,
-      actor_id: profile.id,
-      action: `Approved access request for ${name}`,
-      metadata: {},
-    });
+    await api("/admin", { method: "POST", body: JSON.stringify({ action: "approve_request", requestId }) });
 
     setRequests((prev) => prev.map((r) => r.id === requestId ? { ...r, status: "approved" as AdminRequestStatus } : r));
     setAuditLog((prev) => [
@@ -133,18 +117,7 @@ export function AdminContent() {
     const request = requests.find((r) => r.id === requestId);
     const name = request ? getProfileName(request) : "User";
 
-    await supabase.from("admin_requests").update({
-      status: "rejected",
-      reviewed_at: new Date().toISOString(),
-      reviewed_by: profile.id,
-    }).eq("id", requestId);
-
-    await supabase.from("audit_log").insert({
-      workspace_id: profile.workspace_id,
-      actor_id: profile.id,
-      action: `Rejected access request for ${name}`,
-      metadata: {},
-    });
+    await api("/admin", { method: "POST", body: JSON.stringify({ action: "reject_request", requestId }) });
 
     setRequests((prev) => prev.map((r) => r.id === requestId ? { ...r, status: "rejected" as AdminRequestStatus } : r));
     setAuditLog((prev) => [
@@ -159,11 +132,9 @@ export function AdminContent() {
     setWorkspacePaused((prev) => !prev);
     const action = workspacePaused ? "resumed" : "paused";
 
-    await supabase.from("audit_log").insert({
-      workspace_id: profile.workspace_id,
-      actor_id: profile.id,
-      action: `Workspace '${workspaceName}' ${action}`,
-      metadata: {},
+    await api("/admin", {
+      method: "POST",
+      body: JSON.stringify({ action: "audit_log", logAction: `Workspace '${workspaceName}' ${action}`, metadata: {} }),
     });
 
     setAuditLog((prev) => [
@@ -176,11 +147,9 @@ export function AdminContent() {
   async function handleDeleteWorkspace() {
     if (!profile) return;
 
-    await supabase.from("audit_log").insert({
-      workspace_id: profile.workspace_id,
-      actor_id: profile.id,
-      action: `Workspace '${workspaceName}' deleted`,
-      metadata: {},
+    await api("/admin", {
+      method: "POST",
+      body: JSON.stringify({ action: "audit_log", logAction: `Workspace '${workspaceName}' deleted`, metadata: {} }),
     });
 
     setAuditLog((prev) => [
