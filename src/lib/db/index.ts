@@ -212,6 +212,135 @@ function initSchema(db: Database.Database) {
       members_can_manage_integrations INTEGER NOT NULL DEFAULT 0,
       allowed_integrations TEXT NOT NULL DEFAULT '["slack","github","gmail","discord","teams","messenger"]'
     );
+
+    -- ═══════════════════════════════════════════════
+    -- Performance Management & Cross-Module Tables
+    -- ═══════════════════════════════════════════════
+
+    -- Skills catalog (workspace-level)
+    CREATE TABLE IF NOT EXISTS skills (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      category TEXT NOT NULL DEFAULT 'General',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(workspace_id, name)
+    );
+    CREATE INDEX IF NOT EXISTS idx_skills_workspace ON skills(workspace_id);
+
+    -- Junction: profile ↔ skill (the skills matrix)
+    CREATE TABLE IF NOT EXISTS profile_skills (
+      id TEXT PRIMARY KEY,
+      profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+      skill_id TEXT NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
+      proficiency TEXT NOT NULL DEFAULT 'beginner' CHECK(proficiency IN ('beginner','intermediate','advanced','expert')),
+      source TEXT NOT NULL DEFAULT 'manual' CHECK(source IN ('manual','certification','review')),
+      verified_at TEXT,
+      UNIQUE(profile_id, skill_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_profile_skills_profile ON profile_skills(profile_id);
+
+    -- Review cycles (quarterly)
+    CREATE TABLE IF NOT EXISTS review_cycles (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      quarter TEXT NOT NULL,
+      start_date TEXT NOT NULL,
+      end_date TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'draft' CHECK(status IN ('draft','active','completed')),
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_review_cycles_workspace ON review_cycles(workspace_id);
+
+    -- OKRs / Objectives
+    CREATE TABLE IF NOT EXISTS objectives (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+      review_cycle_id TEXT REFERENCES review_cycles(id) ON DELETE SET NULL,
+      title TEXT NOT NULL,
+      description TEXT,
+      metric TEXT,
+      target_value REAL,
+      current_value REAL NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'on_track' CHECK(status IN ('on_track','at_risk','behind','completed')),
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_objectives_profile ON objectives(profile_id);
+    CREATE INDEX IF NOT EXISTS idx_objectives_cycle ON objectives(review_cycle_id);
+
+    -- Individual reviews (within a cycle)
+    CREATE TABLE IF NOT EXISTS reviews (
+      id TEXT PRIMARY KEY,
+      review_cycle_id TEXT NOT NULL REFERENCES review_cycles(id) ON DELETE CASCADE,
+      reviewee_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+      reviewer_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+      rating INTEGER CHECK(rating BETWEEN 1 AND 5),
+      summary TEXT,
+      strengths TEXT,
+      improvements TEXT,
+      status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','in_progress','submitted')),
+      submitted_at TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_reviews_cycle ON reviews(review_cycle_id);
+    CREATE INDEX IF NOT EXISTS idx_reviews_reviewee ON reviews(reviewee_id);
+
+    -- Skill gaps flagged in reviews → triggers LMS recommendation
+    CREATE TABLE IF NOT EXISTS review_skill_gaps (
+      id TEXT PRIMARY KEY,
+      review_id TEXT NOT NULL REFERENCES reviews(id) ON DELETE CASCADE,
+      skill_id TEXT NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
+      recommended_course_id TEXT REFERENCES courses(id) ON DELETE SET NULL,
+      notes TEXT,
+      resolved INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_review_skill_gaps_review ON review_skill_gaps(review_id);
+
+    -- Certifications (earned on course completion)
+    CREATE TABLE IF NOT EXISTS certifications (
+      id TEXT PRIMARY KEY,
+      profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+      course_id TEXT NOT NULL REFERENCES courses(id) ON DELETE CASCADE,
+      skill_id TEXT REFERENCES skills(id) ON DELETE SET NULL,
+      issued_at TEXT NOT NULL DEFAULT (datetime('now')),
+      expires_at TEXT,
+      UNIQUE(profile_id, course_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_certifications_profile ON certifications(profile_id);
+
+    -- Course ↔ Skill mapping (which skills a course teaches)
+    CREATE TABLE IF NOT EXISTS course_skills (
+      id TEXT PRIMARY KEY,
+      course_id TEXT NOT NULL REFERENCES courses(id) ON DELETE CASCADE,
+      skill_id TEXT NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
+      UNIQUE(course_id, skill_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_course_skills_course ON course_skills(course_id);
+
+    -- Additional performance indexes
+    CREATE INDEX IF NOT EXISTS idx_objectives_workspace ON objectives(workspace_id);
+    CREATE INDEX IF NOT EXISTS idx_reviews_reviewer ON reviews(reviewer_id);
+
+    -- ═══════════════════════════════════════════════
+    -- API Keys (org-level access tokens)
+    -- ═══════════════════════════════════════════════
+    CREATE TABLE IF NOT EXISTS api_keys (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      key_prefix TEXT NOT NULL,
+      key_hash TEXT NOT NULL,
+      scopes TEXT NOT NULL DEFAULT '["read"]',
+      created_by TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      last_used_at TEXT,
+      revoked_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_api_keys_workspace ON api_keys(workspace_id);
   `);
 }
 

@@ -25,6 +25,7 @@ export function createSession(userId: string): string {
 export function getSessionUser(sessionId: string | undefined): { userId: string; email: string } | null {
   if (!sessionId) return null;
   const db = getDb();
+  maybeCleanExpiredSessions();
   const row = db.prepare(`
     SELECT s.user_id, u.email FROM sessions s
     JOIN users u ON u.id = s.user_id
@@ -44,9 +45,25 @@ export function deleteAllSessions(userId: string): void {
   db.prepare("DELETE FROM sessions WHERE user_id = ?").run(userId);
 }
 
+/** Probabilistic cleanup of expired sessions (~1% of calls) */
+export function maybeCleanExpiredSessions(): void {
+  if (Math.random() > 0.01) return;
+  const db = getDb();
+  db.prepare("DELETE FROM sessions WHERE expires_at <= datetime('now')").run();
+}
+
 export function getProfileByUserId(userId: string) {
   const db = getDb();
   return db.prepare("SELECT * FROM profiles WHERE user_id = ?").get(userId) as Record<string, unknown> | undefined;
+}
+
+export async function getAuthProfile() {
+  const { cookies } = await import("next/headers");
+  const cookieStore = await cookies();
+  const sessionId = cookieStore.get(SESSION_COOKIE)?.value;
+  const session = getSessionUser(sessionId);
+  if (!session) return null;
+  return getProfileByUserId(session.userId) ?? null;
 }
 
 export function sessionCookieOptions() {

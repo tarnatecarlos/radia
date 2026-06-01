@@ -19,6 +19,7 @@ import { useUser } from "@/lib/user-context";
 import { api } from "@/lib/api";
 import type { Profile, Task, TaskPriority, TaskStatus } from "@/lib/types";
 import { useToast } from "@/components/ui/toast";
+import { getInitials, formatShortDate, getErrorMessage } from "@/lib/utils";
 
 type ViewMode = "table" | "list" | "kanban";
 type ColumnKey = TaskStatus;
@@ -47,18 +48,6 @@ const avatarColorClasses = [
 
 function getAvatarColor(id: string) {
   return avatarColorClasses[(parseInt(id.replace(/\D/g, ""), 10) || 0) % avatarColorClasses.length];
-}
-
-function getInitials(firstName: string, lastName: string) {
-  return `${firstName[0]}${lastName[0]}`;
-}
-
-function formatShortDate(dateStr: string) {
-  return new Date(dateStr).toLocaleDateString("en-US", { month: "short", day: "numeric" });
-}
-
-function getErrorMessage(error: unknown, fallback: string) {
-  return error instanceof Error && error.message ? error.message : fallback;
 }
 
 function StatusPill({ status }: { status: TaskStatus }) {

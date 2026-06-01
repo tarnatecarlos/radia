@@ -15,8 +15,8 @@ import {
 import { useUser } from "@/lib/user-context";
 import { api } from "@/lib/api";
 import { buildOrgTree } from "@/lib/utils/roles";
-import type { OrgNode } from "@/lib/types";
-import type { Profile } from "@/lib/types";
+import { getInitials, formatShortDate } from "@/lib/utils";
+import type { OrgNode, Profile } from "@/lib/types";
 
 type LayoutMode = "top-down" | "left-right";
 
@@ -104,18 +104,6 @@ const avatarColorClasses = [
 function getAvatarColor(id: string) {
   const parsed = parseInt(id.replace(/\D/g, ""), 10) || 0;
   return avatarColorClasses[parsed % avatarColorClasses.length];
-}
-
-function getInitials(firstName: string, lastName: string) {
-  return `${firstName[0]}${lastName[0]}`;
-}
-
-function formatDate(value: string) {
-  return new Date(value).toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
 }
 
 function getRoleTone(role: string) {
@@ -577,7 +565,7 @@ export function OrgChartContent() {
                 <User className="mt-0.5 h-4 w-4 text-slate-400" />
                 <div>
                   <p className="text-[11px] text-slate-400 dark:text-slate-500">Started</p>
-                  <p className="text-sm text-slate-700 dark:text-slate-200">{formatDate(selectedPerson.started_date)}</p>
+                  <p className="text-sm text-slate-700 dark:text-slate-200">{formatShortDate(selectedPerson.started_date)}</p>
                 </div>
               </div>
               <div className="flex items-start gap-3">

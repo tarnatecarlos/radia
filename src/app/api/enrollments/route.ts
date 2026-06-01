@@ -1,17 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { cookies } from "next/headers";
 import { getDb, uid } from "@/lib/db";
-import { getSessionUser, getProfileByUserId, SESSION_COOKIE } from "@/lib/auth";
-
-async function getAuthProfile() {
-  const cookieStore = await cookies();
-  const sessionId = cookieStore.get(SESSION_COOKIE)?.value;
-  const session = getSessionUser(sessionId);
-  if (!session) return null;
-  const profile = getProfileByUserId(session.userId);
-  if (!profile) return null;
-  return profile;
-}
+import { getAuthProfile } from "@/lib/auth";
 
 function parseEnrollment(row: Record<string, unknown>) {
   return {
@@ -117,15 +106,68 @@ export async function PATCH(request: NextRequest) {
         ? "datetime('now')"
         : null;
 
-    if (completedAt) {
-      db.prepare(
-        `UPDATE course_enrollments SET completed_lessons = ?, completed_at = datetime('now') WHERE id = ?`
-      ).run(lessonsJson, id);
-    } else {
-      db.prepare(
-        `UPDATE course_enrollments SET completed_lessons = ?, completed_at = NULL WHERE id = ?`
-      ).run(lessonsJson, id);
-    }
+    const justCompleted = !!(
+      completedAt &&
+      !(enrollment.completed_at as string | null)
+    );
+
+    const runUpdate = db.transaction(() => {
+      if (completedAt) {
+        db.prepare(
+          `UPDATE course_enrollments SET completed_lessons = ?, completed_at = datetime('now') WHERE id = ?`
+        ).run(lessonsJson, id);
+      } else {
+        db.prepare(
+          `UPDATE course_enrollments SET completed_lessons = ?, completed_at = NULL WHERE id = ?`
+        ).run(lessonsJson, id);
+      }
+
+      // Profile enrichment: on course completion, issue certification + update skills
+      if (justCompleted) {
+        const profileId = enrollment.profile_id as string;
+
+        db.prepare(
+          `INSERT OR IGNORE INTO certifications (id, profile_id, course_id, issued_at)
+           VALUES (?, ?, ?, datetime('now'))`
+        ).run(uid(), profileId, courseId);
+
+        const courseSkills = db.prepare(
+          "SELECT skill_id FROM course_skills WHERE course_id = ?"
+        ).all(courseId) as { skill_id: string }[];
+
+        for (const cs of courseSkills) {
+          db.prepare(
+            `UPDATE certifications SET skill_id = ? WHERE profile_id = ? AND course_id = ? AND skill_id IS NULL`
+          ).run(cs.skill_id, profileId, courseId);
+
+          const existing = db.prepare(
+            "SELECT id, proficiency FROM profile_skills WHERE profile_id = ? AND skill_id = ?"
+          ).get(profileId, cs.skill_id) as { id: string; proficiency: string } | undefined;
+
+          if (existing) {
+            const levels = ["beginner", "intermediate", "advanced", "expert"];
+            if (levels.indexOf(existing.proficiency) < levels.indexOf("intermediate")) {
+              db.prepare(
+                "UPDATE profile_skills SET proficiency = 'intermediate', source = 'certification', verified_at = datetime('now') WHERE id = ?"
+              ).run(existing.id);
+            }
+          } else {
+            db.prepare(
+              `INSERT INTO profile_skills (id, profile_id, skill_id, proficiency, source, verified_at)
+               VALUES (?, ?, ?, 'intermediate', 'certification', datetime('now'))`
+            ).run(uid(), profileId, cs.skill_id);
+          }
+
+          db.prepare(
+            `UPDATE review_skill_gaps SET resolved = 1
+             WHERE skill_id = ? AND review_id IN (
+               SELECT id FROM reviews WHERE reviewee_id = ?
+             ) AND resolved = 0`
+          ).run(cs.skill_id, profileId);
+        }
+      }
+    });
+    runUpdate();
 
     const updated = db
       .prepare("SELECT * FROM course_enrollments WHERE id = ?")

@@ -2,13 +2,15 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { ArrowRight, Loader2 } from "lucide-react";
 import { useToast } from "@/components/ui/toast";
 import { api } from "@/lib/api";
 
 export default function LoginPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const inviteToken = searchParams.get("invite");
   const { toast } = useToast();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -29,7 +31,15 @@ export default function LoginPage() {
       });
 
       toast("Welcome back!");
-      router.push("/setup");
+
+      // If we have an invite token, pass it through to setup
+      if (inviteToken) {
+        router.push(`/setup?invite=${inviteToken}`);
+      } else {
+        // Check if setup is already complete to skip the setup page
+        const me = await api<{ profile: { setup_completed: boolean } | null }>("/auth/me").catch(() => null);
+        router.push(me?.profile?.setup_completed ? "/dashboard" : "/setup");
+      }
     } catch (err) {
       toast(err instanceof Error ? err.message : "Something went wrong. Please try again.", "error");
     } finally {

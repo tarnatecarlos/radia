@@ -6,6 +6,7 @@ import { ArrowLeft, BookOpen, CheckCircle2, Clock, GraduationCap, Minus, Play, P
 import type { Course, CourseEnrollment } from "@/lib/types";
 import { useToast } from "@/components/ui/toast";
 import { RichContent } from "@/components/ui/rich-content";
+import { DocEditor } from "@/components/ui/doc-editor";
 import { useUser } from "@/lib/user-context";
 import { api } from "@/lib/api";
 
@@ -226,12 +227,10 @@ export function OnboardingContent() {
                             </button>
                           )}
                         </div>
-                        <textarea
+                        <DocEditor
                           value={lesson.content}
-                          onChange={(e) => updateLesson(idx, "content", e.target.value)}
-                          rows={3}
-                          placeholder="Lesson content (Markdown supported)..."
-                          className="radia-input w-full resize-none px-2.5 py-1.5 font-mono text-xs text-slate-900 dark:text-slate-100"
+                          onChange={(val) => updateLesson(idx, "content", val)}
+                          placeholder="Write lesson content here..."
                         />
                       </div>
                     ))}

@@ -6,7 +6,7 @@ export async function POST() {
   try {
     const db = getDb();
 
-    // Only seed if no users exist
+    // Only seed if no users exist — this is the safety gate
     const userCount = db
       .prepare("SELECT COUNT(*) as count FROM users")
       .get() as { count: number };
@@ -14,7 +14,7 @@ export async function POST() {
     if (userCount.count > 0) {
       return NextResponse.json(
         { error: "Database already has users. Seed aborted." },
-        { status: 409 }
+        { status: 403 }
       );
     }
 

@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   ArrowRight,
@@ -15,6 +15,7 @@ import {
   Users,
 } from "lucide-react";
 import { api } from "@/lib/api";
+import { useToast } from "@/components/ui/toast";
 import type { Profile } from "@/lib/types";
 
 type Step = "welcome" | "choose" | "join" | "create";
@@ -26,7 +27,22 @@ interface OrgMatch {
 }
 
 export default function SetupPage() {
+  return (
+    <Suspense fallback={
+      <div className="flex min-h-screen items-center justify-center bg-slate-50 dark:bg-slate-950">
+        <Loader2 className="h-6 w-6 animate-spin text-indigo-600" />
+      </div>
+    }>
+      <SetupPageInner />
+    </Suspense>
+  );
+}
+
+function SetupPageInner() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const inviteToken = searchParams.get("invite");
+  const { toast } = useToast();
 
   const [step, setStep] = useState<Step>("welcome");
   const [profile, setProfile] = useState<Profile | null>(null);
@@ -51,20 +67,49 @@ export default function SetupPage() {
           return;
         }
 
-        // Already completed setup — go to dashboard
-        if (data.profile.setup_completed) {
+        // Already completed setup and no invite — go to dashboard
+        if (data.profile.setup_completed && !inviteToken) {
           router.push("/dashboard");
           return;
         }
 
         setProfile(data.profile);
+
+        // If we have an invite token, try to auto-accept it
+        if (inviteToken) {
+          try {
+            await api("/invites", {
+              method: "PATCH",
+              body: JSON.stringify({ token: inviteToken }),
+            });
+
+            // Mark setup complete if not already
+            if (!data.profile.setup_completed) {
+              await api("/profiles", {
+                method: "PATCH",
+                body: JSON.stringify({ id: data.profile.id, setup_completed: true }),
+              });
+            }
+
+            toast("You've joined the workspace!");
+            router.push("/dashboard");
+            return;
+          } catch (err) {
+            // Invite failed — show normal setup flow with error
+            toast(
+              err instanceof Error ? err.message : "Invite could not be accepted",
+              "error"
+            );
+          }
+        }
+
         setLoading(false);
       } catch {
         router.push("/login");
       }
     }
     init();
-  }, [router]);
+  }, [router, inviteToken, toast]);
 
   async function searchOrganizations() {
     if (!profile) return;
@@ -74,9 +119,7 @@ export default function SetupPage() {
     const domain = profile.email.split("@")[1];
 
     try {
-      const orgs = await api<{ id: string; name: string; subdomain: string }[]>(
-        "/workspaces/search?domain=" + domain
-      );
+      const orgs = await api<OrgMatch[]>("/workspaces/search?domain=" + domain);
       setMatchedOrgs(orgs);
     } catch {
       setMatchedOrgs([]);
@@ -91,32 +134,35 @@ export default function SetupPage() {
     setCreating(true);
 
     try {
-      // Update the user's auto-created workspace with the real org name
       const subdomain = orgName.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
       await api("/workspaces", {
         method: "PATCH",
         body: JSON.stringify({ id: profile.workspace_id, name: orgName.trim(), subdomain: subdomain || `org-${Date.now()}` }),
       });
 
-      // Mark setup complete
       await api("/profiles", {
         method: "PATCH",
         body: JSON.stringify({ id: profile.id, setup_completed: true }),
       });
 
       router.push("/dashboard");
-    } catch {
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Failed to create organization", "error");
       setCreating(false);
     }
   }
 
   async function handleSkipSetup() {
     if (!profile) return;
-    await api("/profiles", {
-      method: "PATCH",
-      body: JSON.stringify({ id: profile.id, setup_completed: true }),
-    });
-    router.push("/dashboard");
+    try {
+      await api("/profiles", {
+        method: "PATCH",
+        body: JSON.stringify({ id: profile.id, setup_completed: true }),
+      });
+      router.push("/dashboard");
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Something went wrong", "error");
+    }
   }
 
   if (loading) {

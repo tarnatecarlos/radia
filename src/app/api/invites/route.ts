@@ -1,20 +1,37 @@
 import { NextRequest, NextResponse } from "next/server";
-import { cookies } from "next/headers";
 import { getDb, uid } from "@/lib/db";
-import { getSessionUser, getProfileByUserId, SESSION_COOKIE } from "@/lib/auth";
+import { getAuthProfile } from "@/lib/auth";
 
-async function getAuthProfile() {
-  const cookieStore = await cookies();
-  const sessionId = cookieStore.get(SESSION_COOKIE)?.value;
-  const session = getSessionUser(sessionId);
-  if (!session) return null;
-  const profile = getProfileByUserId(session.userId);
-  if (!profile) return null;
-  return profile;
-}
-
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
+    const url = new URL(request.url);
+    const token = url.searchParams.get("token");
+
+    // Public token validation endpoint (no auth needed)
+    if (token) {
+      const db = getDb();
+      const invite = db
+        .prepare(
+          `SELECT i.*, w.name as workspace_name FROM invites i
+           JOIN workspaces w ON w.id = i.workspace_id
+           WHERE i.token = ?`
+        )
+        .get(token) as Record<string, unknown> | undefined;
+
+      if (!invite) {
+        return NextResponse.json({ error: "Invalid invite" }, { status: 404 });
+      }
+
+      const expired = !!(invite.accepted_at) || new Date(invite.expires_at as string) <= new Date();
+      return NextResponse.json({
+        workspace_name: invite.workspace_name,
+        email: invite.email || null,
+        role: invite.role,
+        expired,
+      });
+    }
+
+    // Authenticated list of workspace invites
     const profile = await getAuthProfile();
     if (!profile) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });

@@ -475,7 +475,23 @@ function getNumberedListIndex(blocks: ParsedBlock[], index: number): number {
   return count;
 }
 
+function isHtml(content: string): boolean {
+  const trimmed = content.trim();
+  return trimmed.startsWith("<") && (trimmed.includes("</") || trimmed.includes("/>"));
+}
+
 export function RichContent({ content }: { content: string }) {
+  // If content is HTML (from the WYSIWYG editor), render it directly
+  if (isHtml(content)) {
+    return (
+      <div
+        className="doc-editor"
+        // eslint-disable-next-line react/no-danger
+        dangerouslySetInnerHTML={{ __html: `<div class="tiptap">${content}</div>` }}
+      />
+    );
+  }
+
   const blocks = useMemo(() => parseBlocks(content), [content]);
 
   return (

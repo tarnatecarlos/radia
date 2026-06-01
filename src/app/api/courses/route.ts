@@ -1,18 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { cookies } from "next/headers";
 import { getDb, uid } from "@/lib/db";
-import { getSessionUser, getProfileByUserId, SESSION_COOKIE } from "@/lib/auth";
+import { getAuthProfile } from "@/lib/auth";
 import { getWorkspacePreferences, hasPrivilegedWorkspaceRole } from "@/lib/workspace-preferences";
-
-async function getAuthProfile() {
-  const cookieStore = await cookies();
-  const sessionId = cookieStore.get(SESSION_COOKIE)?.value;
-  const session = getSessionUser(sessionId);
-  if (!session) return null;
-  const profile = getProfileByUserId(session.userId);
-  if (!profile) return null;
-  return profile;
-}
 
 export async function GET() {
   try {
@@ -26,14 +15,26 @@ export async function GET() {
       .prepare("SELECT * FROM courses WHERE workspace_id = ?")
       .all(profile.workspace_id as string) as Record<string, unknown>[];
 
-    const getLessons = db.prepare(
-      "SELECT * FROM lessons WHERE course_id = ? ORDER BY sort_order ASC"
-    );
+    const allLessons = db
+      .prepare(
+        `SELECT l.* FROM lessons l
+         JOIN courses c ON c.id = l.course_id
+         WHERE c.workspace_id = ?
+         ORDER BY l.sort_order ASC`
+      )
+      .all(profile.workspace_id as string) as Record<string, unknown>[];
+
+    const lessonsByCourse = new Map<string, Record<string, unknown>[]>();
+    for (const lesson of allLessons) {
+      const cid = lesson.course_id as string;
+      if (!lessonsByCourse.has(cid)) lessonsByCourse.set(cid, []);
+      lessonsByCourse.get(cid)!.push(lesson);
+    }
 
     const result = courses.map((course) => ({
       ...course,
       is_mandatory: !!(course.is_mandatory as number),
-      lessons: getLessons.all(course.id as string),
+      lessons: lessonsByCourse.get(course.id as string) ?? [],
     }));
 
     return NextResponse.json(result);

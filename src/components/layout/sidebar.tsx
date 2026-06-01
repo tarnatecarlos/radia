@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
@@ -8,12 +9,16 @@ import {
   GraduationCap,
   LayoutDashboard,
   LogOut,
+  Menu,
   Moon,
   Network,
   Plug,
   Settings,
   Shield,
+  Sparkles,
   Sun,
+  Target,
+  X,
 } from "lucide-react";
 import { useUser } from "@/lib/user-context";
 import { getRoleBadgeColor, getRoleLabel } from "@/lib/utils/roles";
@@ -23,7 +28,9 @@ import { api } from "@/lib/api";
 const navItems = [
   { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
   { label: "Tasks", href: "/dashboard/tasks", icon: CheckSquare },
+  { label: "Performance", href: "/dashboard/performance", icon: Target },
   { label: "Org Chart", href: "/dashboard/org-chart", icon: Network },
+  { label: "Skills", href: "/dashboard/skills", icon: Sparkles },
   { label: "Onboarding", href: "/dashboard/onboarding", icon: GraduationCap },
   { label: "SOPs", href: "/dashboard/sops", icon: BookOpen },
   { label: "Integrations", href: "/dashboard/integrations", icon: Plug },
@@ -199,8 +206,22 @@ export function MobileNav() {
   const pathname = usePathname();
   const router = useRouter();
   const { theme, toggleTheme } = useTheme();
-  const { profile } = useUser();
+  const { profile, serverAdmins } = useUser();
   const isDark = theme === "dark";
+  const [open, setOpen] = useState(false);
+
+  // Close on route change
+  useEffect(() => {
+    setOpen(false);
+  }, [pathname]);
+
+  // Lock body scroll when open
+  useEffect(() => {
+    if (open) {
+      document.body.style.overflow = "hidden";
+      return () => { document.body.style.overflow = ""; };
+    }
+  }, [open]);
 
   const isActive = (href: string) => {
     if (href === "/dashboard") return pathname === "/dashboard";
@@ -217,73 +238,127 @@ export function MobileNav() {
   }
 
   return (
-    <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/95 backdrop-blur md:hidden dark:border-slate-800 dark:bg-slate-900/95">
-      <div className="flex items-center justify-between gap-3 px-4 py-3">
+    <header className="sticky top-0 z-30 md:hidden">
+      <div className="flex items-center justify-between gap-3 border-b border-slate-200 bg-white/95 px-4 py-3 backdrop-blur dark:border-slate-800 dark:bg-slate-900/95">
         <Link href="/dashboard" className="inline-flex items-center gap-2">
           <span className="text-xl font-bold tracking-tight text-slate-900 dark:text-slate-100">Radia</span>
           <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-indigo-600 dark:bg-indigo-400" />
         </Link>
 
-        <div className="flex items-center gap-1">
-          {profile && (
-            <span className="mr-1 flex h-8 w-8 items-center justify-center rounded-full bg-indigo-600 text-xs font-semibold text-white">
-              {initials(profile.first_name, profile.last_name)}
-            </span>
-          )}
-          <button
-            type="button"
-            onClick={toggleTheme}
-            aria-label={isDark ? "Switch to light mode" : "Switch to dark mode"}
-            className="inline-flex h-9 w-9 items-center justify-center rounded-lg text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-slate-100"
-          >
-            {isDark ? <Sun className="h-[18px] w-[18px]" /> : <Moon className="h-[18px] w-[18px]" />}
-          </button>
-          <button
-            type="button"
-            onClick={handleLogout}
-            aria-label="Log out"
-            className="inline-flex h-9 w-9 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200"
-          >
-            <LogOut className="h-[18px] w-[18px]" />
-          </button>
-        </div>
+        <button
+          type="button"
+          onClick={() => setOpen(!open)}
+          aria-label={open ? "Close menu" : "Open menu"}
+          className="inline-flex h-9 w-9 items-center justify-center rounded-lg text-slate-600 transition-colors hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
+        >
+          {open ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
+        </button>
       </div>
 
-      <nav className="overflow-x-auto px-3 pb-3" aria-label="Primary navigation">
-        <div className="flex min-w-max gap-1">
-          {navItems.map((item) => {
-            const active = isActive(item.href);
-            const Icon = item.icon;
-            return (
+      {/* Slide-over menu */}
+      {open && (
+        <>
+          <div className="fixed inset-0 z-40 bg-black/40" onClick={() => setOpen(false)} />
+          <nav className="fixed inset-y-0 left-0 z-50 flex w-72 flex-col border-r border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
+            <div className="flex items-center justify-between px-5 py-4">
+              <Link href="/dashboard" className="inline-flex items-center gap-2" onClick={() => setOpen(false)}>
+                <span className="text-xl font-bold tracking-tight text-slate-900 dark:text-slate-100">Radia</span>
+                <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-indigo-600 dark:bg-indigo-400" />
+              </Link>
+              <button onClick={() => setOpen(false)} className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto px-3">
+              <p className="px-3 pb-2 text-[10px] font-semibold uppercase tracking-[0.06em] text-slate-400 dark:text-slate-500">Menu</p>
+              <div className="space-y-1">
+                {navItems.map((item) => {
+                  const active = isActive(item.href);
+                  const Icon = item.icon;
+                  return (
+                    <Link
+                      key={item.href}
+                      href={item.href}
+                      onClick={() => setOpen(false)}
+                      aria-current={active ? "page" : undefined}
+                      className={`relative flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
+                        active
+                          ? "bg-indigo-50 text-indigo-700 dark:bg-indigo-500/20 dark:text-indigo-300"
+                          : "text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-slate-100"
+                      }`}
+                    >
+                      {active && <span className="absolute left-0 top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-r-full bg-indigo-600 dark:bg-indigo-400" />}
+                      <Icon className="h-[18px] w-[18px] flex-shrink-0" />
+                      {item.label}
+                    </Link>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="space-y-1 border-t border-slate-200 px-3 pb-4 pt-2 dark:border-slate-800">
               <Link
-                key={item.href}
-                href={item.href}
-                aria-current={active ? "page" : undefined}
-                className={`inline-flex min-h-10 items-center gap-2 rounded-lg px-3 text-sm font-medium transition-colors ${
-                  active
+                href="/dashboard/settings"
+                onClick={() => setOpen(false)}
+                className={`relative flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
+                  isActive("/dashboard/settings")
                     ? "bg-indigo-50 text-indigo-700 dark:bg-indigo-500/20 dark:text-indigo-300"
                     : "text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-slate-100"
                 }`}
               >
-                <Icon className="h-4 w-4 flex-shrink-0" />
-                {item.label}
+                <Settings className="h-[18px] w-[18px]" />
+                Settings
               </Link>
-            );
-          })}
-          <Link
-            href="/dashboard/settings"
-            aria-current={isActive("/dashboard/settings") ? "page" : undefined}
-            className={`inline-flex min-h-10 items-center gap-2 rounded-lg px-3 text-sm font-medium transition-colors ${
-              isActive("/dashboard/settings")
-                ? "bg-indigo-50 text-indigo-700 dark:bg-indigo-500/20 dark:text-indigo-300"
-                : "text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-slate-100"
-            }`}
-          >
-            <Settings className="h-4 w-4 flex-shrink-0" />
-            Settings
-          </Link>
-        </div>
-      </nav>
+
+              <button
+                type="button"
+                onClick={toggleTheme}
+                className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-slate-100"
+              >
+                {isDark ? <Sun className="h-[18px] w-[18px]" /> : <Moon className="h-[18px] w-[18px]" />}
+                {isDark ? "Light Mode" : "Dark Mode"}
+              </button>
+
+              {profile && profile.role === "creator" && serverAdmins.some((sa) => sa.profile_id === profile.id) && (
+                <Link
+                  href="/dashboard/admin"
+                  onClick={() => setOpen(false)}
+                  className={`relative flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
+                    isActive("/dashboard/admin")
+                      ? "bg-rose-50 text-rose-700 dark:bg-rose-500/20 dark:text-rose-300"
+                      : "text-rose-500 hover:bg-rose-50 hover:text-rose-700 dark:text-rose-300 dark:hover:bg-rose-500/15"
+                  }`}
+                >
+                  <Shield className="h-[18px] w-[18px]" />
+                  Admin Panel
+                </Link>
+              )}
+
+              {profile && (
+                <div className="mt-1 flex items-center gap-3 rounded-lg px-3 py-2">
+                  <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-indigo-600 text-xs font-semibold text-white">
+                    {initials(profile.first_name, profile.last_name)}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium text-slate-900 dark:text-slate-100">{profile.first_name} {profile.last_name}</p>
+                    <p className="truncate text-[11px] text-slate-400 dark:text-slate-500">{profile.title}</p>
+                  </div>
+                </div>
+              )}
+
+              <button
+                type="button"
+                onClick={handleLogout}
+                className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200"
+              >
+                <LogOut className="h-[18px] w-[18px]" />
+                Log out
+              </button>
+            </div>
+          </nav>
+        </>
+      )}
     </header>
   );
 }

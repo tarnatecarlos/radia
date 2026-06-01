@@ -1,8 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
+import { getAuthProfile } from "@/lib/auth";
 
 export async function GET(request: NextRequest) {
   try {
+    const profile = await getAuthProfile();
+    if (!profile) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
     const url = new URL(request.url);
     const domain = url.searchParams.get("domain");
     if (!domain) {
@@ -18,7 +24,8 @@ export async function GET(request: NextRequest) {
       .prepare(
         `SELECT DISTINCT w.* FROM workspaces w
          JOIN profiles p ON p.workspace_id = w.id
-         WHERE p.email LIKE ?`
+         WHERE p.email LIKE ?
+         LIMIT 25`
       )
       .all(emailPattern);
 

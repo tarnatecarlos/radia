@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import Link from "next/link";
 
 export default function AuthLayout({ children }: { children: React.ReactNode }) {
@@ -7,7 +8,7 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
         <span className="text-3xl font-bold tracking-tight text-slate-900 dark:text-slate-100">Radia</span>
         <span className="mt-0.5 h-2 w-2 rounded-full bg-indigo-600 dark:bg-indigo-400" />
       </Link>
-      {children}
+      <Suspense>{children}</Suspense>
     </div>
   );
 }

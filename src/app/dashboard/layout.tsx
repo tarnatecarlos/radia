@@ -1,11 +1,22 @@
+import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
+import { getSessionUser, SESSION_COOKIE } from "@/lib/auth";
 import { MobileNav, Sidebar } from "@/components/layout/sidebar";
 import { UserProvider } from "@/lib/user-context";
 
-export default function DashboardLayout({
+export default async function DashboardLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
+  const cookieStore = await cookies();
+  const sessionId = cookieStore.get(SESSION_COOKIE)?.value;
+  const session = getSessionUser(sessionId);
+
+  if (!session) {
+    redirect("/login");
+  }
+
   return (
     <UserProvider>
       <div className="flex min-h-[100dvh] bg-slate-50 dark:bg-slate-950">

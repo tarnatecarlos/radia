@@ -1,17 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { cookies } from "next/headers";
 import { getDb, uid } from "@/lib/db";
-import { getSessionUser, getProfileByUserId, SESSION_COOKIE } from "@/lib/auth";
-
-async function getAuthProfile() {
-  const cookieStore = await cookies();
-  const sessionId = cookieStore.get(SESSION_COOKIE)?.value;
-  const session = getSessionUser(sessionId);
-  if (!session) return null;
-  const profile = getProfileByUserId(session.userId);
-  if (!profile) return null;
-  return profile;
-}
+import { getAuthProfile } from "@/lib/auth";
 
 export async function GET(request: NextRequest) {
   try {
@@ -116,11 +105,25 @@ export async function POST(request: NextRequest) {
       "INSERT INTO notification_preferences (id, profile_id) VALUES (?, ?)"
     ).run(uid(), newId);
 
+    // ── Automated Onboarding: auto-enroll in all mandatory courses ──
+    const mandatoryCourses = db.prepare(
+      "SELECT id FROM courses WHERE workspace_id = ? AND is_mandatory = 1"
+    ).all(profile.workspace_id as string) as { id: string }[];
+
+    for (const course of mandatoryCourses) {
+      const enrollId = uid();
+      db.prepare(
+        `INSERT OR IGNORE INTO course_enrollments (id, profile_id, course_id, completed_lessons)
+         VALUES (?, ?, ?, '[]')`
+      ).run(enrollId, newId, course.id);
+    }
+
     const created = db.prepare("SELECT * FROM profiles WHERE id = ?").get(newId) as Record<string, unknown>;
     return NextResponse.json({
       ...created,
       onboarding_completed: !!(created.onboarding_completed as number),
       setup_completed: !!(created.setup_completed as number),
+      auto_enrolled_courses: mandatoryCourses.length,
     });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Internal error";

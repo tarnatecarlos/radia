@@ -2,7 +2,7 @@
 
 import { useState, useEffect, type ComponentType, type CSSProperties } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { GitBranch, Hash, Mail, MessageSquare, Send, Settings, Users, X, Zap } from "lucide-react";
+import { Copy, GitBranch, Hash, Key, Mail, MessageSquare, Plus, RefreshCw, Send, Settings, Trash2, Users, X, Zap } from "lucide-react";
 import { useUser } from "@/lib/user-context";
 import { api } from "@/lib/api";
 import { useToast } from "@/components/ui/toast";
@@ -84,15 +84,35 @@ const iconMap: Record<string, ComponentType<{ className?: string }>> = {
   slack: Hash, github: GitBranch, gmail: Mail, discord: MessageSquare, teams: Users, messenger: Send,
 };
 
+interface ApiKeyRow {
+  id: string;
+  name: string;
+  key_prefix: string;
+  scopes: string[];
+  created_at: string;
+  last_used_at: string | null;
+  revoked_at: string | null;
+  created_by_name: string;
+}
+
 export function IntegrationsContent() {
   const { toast } = useToast();
   const { profile, preferences, refresh } = useUser();
   const canManage = profile?.role === 'creator' || profile?.role === 'moderator' || !!preferences?.members_can_manage_integrations;
+  const isAdmin = profile?.role === 'creator' || profile?.role === 'moderator';
 
   const [integrationStates, setIntegrationStates] = useState<IntegrationRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [configuring, setConfiguring] = useState<string | null>(null);
   const [configValues, setConfigValues] = useState<Record<string, string>>({});
+
+  // API Keys state
+  const [apiKeys, setApiKeys] = useState<ApiKeyRow[]>([]);
+  const [showCreateKey, setShowCreateKey] = useState(false);
+  const [newKeyName, setNewKeyName] = useState("");
+  const [newKeyScopes, setNewKeyScopes] = useState<string[]>(["read"]);
+  const [newKeyRevealed, setNewKeyRevealed] = useState<string | null>(null);
+  const [creatingKey, setCreatingKey] = useState(false);
   const filteredIntegrations = canManage
     ? integrationStates
     : integrationStates.filter(i => preferences?.allowed_integrations?.includes(i.platform_name));
@@ -102,22 +122,33 @@ export function IntegrationsContent() {
     if (!profile?.workspace_id) return;
 
     let cancelled = false;
-    api<IntegrationRow[]>("/integrations")
-      .then((data) => {
-        if (cancelled) return;
-        setIntegrationStates(data);
-        setLoading(false);
-      })
+
+    const promises: Promise<void>[] = [
+      api<IntegrationRow[]>("/integrations").then((data) => {
+        if (!cancelled) setIntegrationStates(data);
+      }),
+    ];
+
+    if (isAdmin) {
+      promises.push(
+        api<ApiKeyRow[]>("/api-keys").then((data) => {
+          if (!cancelled) setApiKeys(data);
+        }).catch(() => {})
+      );
+    }
+
+    Promise.all(promises)
       .catch(() => {
-        if (cancelled) return;
-        toast("Failed to load integrations", "error");
-        setLoading(false);
+        if (!cancelled) toast("Failed to load integrations", "error");
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
       });
 
     return () => {
       cancelled = true;
     };
-  }, [profile?.workspace_id, toast]);
+  }, [profile?.workspace_id, isAdmin, toast]);
 
   const toggleIntegration = async (id: string) => {
     const item = integrationStates.find((i) => i.id === id);
@@ -161,6 +192,54 @@ export function IntegrationsContent() {
       setConfigValues({});
     } catch {
       toast("Failed to save configuration", "error");
+    }
+  };
+
+  const handleCreateKey = async () => {
+    if (!newKeyName.trim()) { toast("Key name is required", "error"); return; }
+    setCreatingKey(true);
+    try {
+      const data = await api<{ id: string; name: string; key: string; prefix: string; scopes: string[] }>("/api-keys", {
+        method: "POST",
+        body: JSON.stringify({ name: newKeyName.trim(), scopes: newKeyScopes }),
+      });
+      setApiKeys((prev) => [{ ...data, key_prefix: data.prefix, created_at: new Date().toISOString(), last_used_at: null, revoked_at: null, created_by_name: `${profile?.first_name} ${profile?.last_name}` }, ...prev]);
+      setNewKeyRevealed(data.key);
+      setNewKeyName("");
+      setNewKeyScopes(["read"]);
+      toast("API key created — copy it now, it won't be shown again");
+    } catch {
+      toast("Failed to create API key", "error");
+    } finally {
+      setCreatingKey(false);
+    }
+  };
+
+  const handleRevokeKey = async (id: string) => {
+    try {
+      await api("/api-keys", { method: "DELETE", body: JSON.stringify({ id }) });
+      setApiKeys((prev) => prev.map((k) => k.id === id ? { ...k, revoked_at: new Date().toISOString() } : k));
+      toast("API key revoked");
+    } catch {
+      toast("Failed to revoke key", "error");
+    }
+  };
+
+  const handleRotateKey = async (id: string) => {
+    try {
+      const data = await api<{ id: string; name: string; key: string; prefix: string; scopes: string[] }>("/api-keys", {
+        method: "PATCH",
+        body: JSON.stringify({ id }),
+      });
+      // Replace old key with new one in the list
+      setApiKeys((prev) => [
+        { ...data, key_prefix: data.prefix, created_at: new Date().toISOString(), last_used_at: null, revoked_at: null, created_by_name: `${profile?.first_name} ${profile?.last_name}` },
+        ...prev.map((k) => k.id === id ? { ...k, revoked_at: new Date().toISOString() } : k),
+      ]);
+      setNewKeyRevealed(data.key);
+      toast("API key rotated — copy the new key now");
+    } catch {
+      toast("Failed to rotate key", "error");
     }
   };
 
@@ -228,9 +307,9 @@ export function IntegrationsContent() {
                 <button
                   onClick={() => canManage && toggleIntegration(integration.id)}
                   disabled={!canManage}
-                  className={`relative h-6 w-11 rounded-full transition ${integration.is_active ? "bg-indigo-600" : "bg-slate-300 dark:bg-slate-700"} ${!canManage ? "pointer-events-none opacity-50" : ""}`}
+                  className={`relative h-6 w-11 rounded-full transition ${integration.is_active ? "bg-indigo-600 dark:bg-indigo-500" : "bg-slate-300 dark:bg-slate-600"} ${!canManage ? "pointer-events-none opacity-50" : ""}`}
                 >
-                  <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white transition-transform ${integration.is_active ? "translate-x-5" : "translate-x-0.5"}`} />
+                  <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition-transform ${integration.is_active ? "translate-x-5" : "translate-x-0.5"}`} />
                 </button>
                 {integration.is_active ? (
                   canManage ? (
@@ -248,6 +327,147 @@ export function IntegrationsContent() {
           );
         })}
       </div>
+
+      {/* API Keys Section — Admin/Creator only */}
+      {isAdmin && (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-xl font-bold tracking-tight text-slate-900 dark:text-slate-100">API Keys</h2>
+              <p className="mt-0.5 text-sm text-slate-400 dark:text-slate-500">Manage API access tokens for your organization</p>
+            </div>
+            <button
+              onClick={() => { setShowCreateKey(true); setNewKeyRevealed(null); }}
+              className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-indigo-700"
+            >
+              <Plus className="h-4 w-4" />New Key
+            </button>
+          </div>
+
+          {/* Revealed key banner */}
+          {newKeyRevealed && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 dark:border-amber-500/30 dark:bg-amber-500/10">
+              <p className="text-sm font-medium text-amber-800 dark:text-amber-200">Copy your API key now — it won&apos;t be shown again.</p>
+              <div className="mt-2 flex items-center gap-2">
+                <code className="flex-1 rounded bg-white px-3 py-2 font-mono text-xs text-slate-900 dark:bg-slate-900 dark:text-slate-100">{newKeyRevealed}</code>
+                <button
+                  onClick={() => { navigator.clipboard.writeText(newKeyRevealed); toast("Copied to clipboard"); }}
+                  className="rounded-md p-2 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800"
+                >
+                  <Copy className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+          )}
+
+          <div className="radia-card overflow-hidden">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-slate-200 text-left dark:border-slate-700">
+                  <th className="px-4 py-3 text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">Name</th>
+                  <th className="px-4 py-3 text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">Key</th>
+                  <th className="hidden px-4 py-3 text-xs font-semibold uppercase text-slate-500 dark:text-slate-400 sm:table-cell">Scopes</th>
+                  <th className="hidden px-4 py-3 text-xs font-semibold uppercase text-slate-500 dark:text-slate-400 md:table-cell">Created</th>
+                  <th className="px-4 py-3 text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">Status</th>
+                  <th className="px-4 py-3"></th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                {apiKeys.length === 0 && (
+                  <tr>
+                    <td colSpan={6} className="px-4 py-8 text-center text-sm text-slate-400 dark:text-slate-500">
+                      <Key className="mx-auto mb-2 h-6 w-6" />
+                      No API keys yet. Create one to enable programmatic access.
+                    </td>
+                  </tr>
+                )}
+                {apiKeys.map((key) => (
+                  <tr key={key.id} className={key.revoked_at ? "opacity-50" : ""}>
+                    <td className="px-4 py-3 font-medium text-slate-900 dark:text-slate-100">{key.name}</td>
+                    <td className="px-4 py-3 font-mono text-xs text-slate-500 dark:text-slate-400">{key.key_prefix}</td>
+                    <td className="hidden px-4 py-3 sm:table-cell">
+                      <div className="flex gap-1">
+                        {key.scopes.map((s) => (
+                          <span key={s} className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-600 dark:bg-slate-800 dark:text-slate-300">{s}</span>
+                        ))}
+                      </div>
+                    </td>
+                    <td className="hidden px-4 py-3 text-xs text-slate-400 dark:text-slate-500 md:table-cell">
+                      {new Date(key.created_at).toLocaleDateString()}
+                    </td>
+                    <td className="px-4 py-3">
+                      {key.revoked_at ? (
+                        <span className="rounded-full bg-rose-50 px-2 py-0.5 text-[10px] font-semibold text-rose-600 dark:bg-rose-500/20 dark:text-rose-300">Revoked</span>
+                      ) : (
+                        <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-600 dark:bg-emerald-500/20 dark:text-emerald-300">Active</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3">
+                      {!key.revoked_at && (
+                        <div className="flex gap-1">
+                          <button onClick={() => handleRotateKey(key.id)} className="rounded p-1 text-slate-400 transition hover:bg-amber-50 hover:text-amber-600 dark:hover:bg-amber-500/10" title="Rotate key">
+                            <RefreshCw className="h-3.5 w-3.5" />
+                          </button>
+                          <button onClick={() => handleRevokeKey(key.id)} className="rounded p-1 text-slate-400 transition hover:bg-rose-50 hover:text-rose-500 dark:hover:bg-rose-500/10" title="Revoke">
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Create API Key Modal */}
+      <AnimatePresence>
+        {showCreateKey && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center">
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 bg-black/50" onClick={() => setShowCreateKey(false)} />
+            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} transition={{ duration: 0.15 }} className="relative w-full max-w-md rounded-xl border border-slate-200 bg-white p-6 shadow-xl dark:border-slate-700 dark:bg-slate-900">
+              <div className="flex items-center justify-between">
+                <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100">Create API Key</h3>
+                <button onClick={() => setShowCreateKey(false)} className="rounded-md p-1 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"><X className="h-5 w-5" /></button>
+              </div>
+              <div className="mt-4 space-y-4">
+                <label className="block">
+                  <span className="mb-1 block text-sm font-medium text-slate-600 dark:text-slate-300">Key Name *</span>
+                  <input value={newKeyName} onChange={(e) => setNewKeyName(e.target.value)} placeholder="e.g. CI/CD Pipeline" className="radia-input w-full px-3 py-2.5 text-sm text-slate-900 dark:text-slate-100" />
+                </label>
+                <fieldset>
+                  <legend className="mb-2 text-sm font-medium text-slate-600 dark:text-slate-300">Scopes</legend>
+                  <div className="space-y-2">
+                    {["read", "write", "admin"].map((scope) => (
+                      <label key={scope} className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          checked={newKeyScopes.includes(scope)}
+                          onChange={(e) => {
+                            setNewKeyScopes((prev) =>
+                              e.target.checked ? [...prev, scope] : prev.filter((s) => s !== scope)
+                            );
+                          }}
+                          className="h-4 w-4 rounded border-slate-300 text-indigo-600 dark:border-slate-600"
+                        />
+                        <span className="text-sm text-slate-700 capitalize dark:text-slate-200">{scope}</span>
+                      </label>
+                    ))}
+                  </div>
+                </fieldset>
+                <div className="flex justify-end gap-2 pt-2">
+                  <button onClick={() => setShowCreateKey(false)} className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800">Cancel</button>
+                  <button onClick={handleCreateKey} disabled={creatingKey} className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50">
+                    {creatingKey ? "Creating..." : "Create Key"}
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
       {/* Configure Modal */}
       <AnimatePresence>

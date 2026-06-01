@@ -1,17 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { cookies } from "next/headers";
 import { getDb } from "@/lib/db";
-import { getSessionUser, getProfileByUserId, SESSION_COOKIE } from "@/lib/auth";
-
-async function getAuthProfile() {
-  const cookieStore = await cookies();
-  const sessionId = cookieStore.get(SESSION_COOKIE)?.value;
-  const session = getSessionUser(sessionId);
-  if (!session) return null;
-  const profile = getProfileByUserId(session.userId);
-  if (!profile) return null;
-  return profile;
-}
+import { getAuthProfile } from "@/lib/auth";
 
 export async function PATCH(request: NextRequest) {
   try {

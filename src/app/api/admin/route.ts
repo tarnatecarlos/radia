@@ -1,23 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
-import { cookies } from "next/headers";
 import { getDb, uid } from "@/lib/db";
-import { getSessionUser, getProfileByUserId, SESSION_COOKIE } from "@/lib/auth";
-
-async function getAuthProfile() {
-  const cookieStore = await cookies();
-  const sessionId = cookieStore.get(SESSION_COOKIE)?.value;
-  const session = getSessionUser(sessionId);
-  if (!session) return null;
-  const profile = getProfileByUserId(session.userId);
-  if (!profile) return null;
-  return profile;
-}
+import { getAuthProfile } from "@/lib/auth";
 
 export async function GET() {
   try {
     const profile = await getAuthProfile();
     if (!profile) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    if (profile.role !== "creator" && profile.role !== "moderator") {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
     const db = getDb();
@@ -74,6 +67,10 @@ export async function POST(request: NextRequest) {
     const profile = await getAuthProfile();
     if (!profile) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    if (profile.role !== "creator" && profile.role !== "moderator") {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
     const body = await request.json();

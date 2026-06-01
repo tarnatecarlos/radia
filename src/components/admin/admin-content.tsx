@@ -7,6 +7,7 @@ import {
 import { useUser } from "@/lib/user-context";
 import { api } from "@/lib/api";
 import { getRoleBadgeColor, getRoleLabel } from "@/lib/utils/roles";
+import { formatShortDate } from "@/lib/utils";
 import type { AdminRequest, AdminRequestStatus, ServerAdmin, Profile } from "@/lib/types";
 import { useToast } from "@/components/ui/toast";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -26,10 +27,6 @@ interface AuditLogEntry {
   created_at: string;
   workspace_id?: string;
   metadata?: Record<string, unknown>;
-}
-
-function formatDate(dateStr: string) {
-  return new Date(dateStr).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
 
 function StatusPill({ status }: { status: AdminRequestStatus }) {
@@ -223,7 +220,7 @@ export function AdminContent() {
                     <td className="px-3 py-3"><span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${getRoleBadgeColor(request.requested_role)}`}>{getRoleLabel(request.requested_role)}</span></td>
                     <td className="max-w-[260px] px-3 py-3 text-slate-600 dark:text-slate-300"><p className="truncate">{request.reason}</p></td>
                     <td className="px-3 py-3"><StatusPill status={request.status} /></td>
-                    <td className="px-3 py-3 text-slate-400 dark:text-slate-500">{formatDate(request.created_at)}</td>
+                    <td className="px-3 py-3 text-slate-400 dark:text-slate-500">{formatShortDate(request.created_at)}</td>
                     <td className="px-3 py-3">
                       {request.status === "pending" ? (
                         <div className="flex items-center gap-2">
@@ -256,7 +253,7 @@ export function AdminContent() {
                   <p className="font-semibold text-slate-900 dark:text-slate-100">{name}</p>
                   <div className="mt-1 flex items-center gap-2">
                     <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${getRoleBadgeColor(admin.server_role)}`}>{getRoleLabel(admin.server_role)}</span>
-                    <span className="text-xs text-slate-400 dark:text-slate-500">since {formatDate(admin.granted_at)}</span>
+                    <span className="text-xs text-slate-400 dark:text-slate-500">since {formatShortDate(admin.granted_at)}</span>
                   </div>
                 </div>
               );

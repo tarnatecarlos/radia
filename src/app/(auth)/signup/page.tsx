@@ -2,13 +2,15 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { ArrowRight, Loader2 } from "lucide-react";
 import { useToast } from "@/components/ui/toast";
 import { api } from "@/lib/api";
 
 export default function SignupPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const inviteToken = searchParams.get("invite");
   const { toast } = useToast();
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
@@ -40,7 +42,8 @@ export default function SignupPage() {
       });
 
       toast("Account created! Redirecting...");
-      router.push("/setup");
+      const redirect = inviteToken ? `/setup?invite=${inviteToken}` : "/setup";
+      router.push(redirect);
     } catch (err) {
       toast(err instanceof Error ? err.message : "Something went wrong. Please try again.", "error");
     } finally {

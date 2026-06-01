@@ -131,3 +131,101 @@ export interface WorkspacePreferences {
   members_can_manage_integrations: boolean;
   allowed_integrations: string[];
 }
+
+// ── Performance Management ──────────────────────
+
+export interface Skill {
+  id: string;
+  workspace_id: string;
+  name: string;
+  category: string;
+  created_at: string;
+}
+
+export type Proficiency = 'beginner' | 'intermediate' | 'advanced' | 'expert';
+export type SkillSource = 'manual' | 'certification' | 'review';
+
+export interface ProfileSkill {
+  id: string;
+  profile_id: string;
+  skill_id: string;
+  proficiency: Proficiency;
+  source: SkillSource;
+  verified_at?: string;
+  skill?: Skill;
+}
+
+export type ReviewCycleStatus = 'draft' | 'active' | 'completed';
+
+export interface ReviewCycle {
+  id: string;
+  workspace_id: string;
+  name: string;
+  quarter: string;
+  start_date: string;
+  end_date: string;
+  status: ReviewCycleStatus;
+  created_at: string;
+  review_count?: number;
+  completed_count?: number;
+}
+
+export type ObjectiveStatus = 'on_track' | 'at_risk' | 'behind' | 'completed';
+
+export interface Objective {
+  id: string;
+  workspace_id: string;
+  profile_id: string;
+  review_cycle_id?: string;
+  title: string;
+  description?: string;
+  metric?: string;
+  target_value?: number;
+  current_value: number;
+  status: ObjectiveStatus;
+  created_at: string;
+  updated_at: string;
+  owner?: Profile;
+}
+
+export type ReviewStatus = 'pending' | 'in_progress' | 'submitted';
+
+export interface Review {
+  id: string;
+  review_cycle_id: string;
+  reviewee_id: string;
+  reviewer_id: string;
+  rating?: number;
+  summary?: string;
+  strengths?: string;
+  improvements?: string;
+  status: ReviewStatus;
+  submitted_at?: string;
+  created_at: string;
+  reviewee?: Profile;
+  reviewer?: Profile;
+  skill_gaps?: ReviewSkillGap[];
+}
+
+export interface ReviewSkillGap {
+  id: string;
+  review_id: string;
+  skill_id: string;
+  recommended_course_id?: string;
+  notes?: string;
+  resolved: boolean;
+  created_at: string;
+  skill?: Skill;
+  course?: Course;
+}
+
+export interface Certification {
+  id: string;
+  profile_id: string;
+  course_id: string;
+  skill_id?: string;
+  issued_at: string;
+  expires_at?: string;
+  course?: Course;
+  skill?: Skill;
+}

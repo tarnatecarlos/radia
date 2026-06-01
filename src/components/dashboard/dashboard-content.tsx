@@ -18,8 +18,9 @@ import type { Task, TaskPriority, TaskStatus, Profile, Course, CourseEnrollment,
 import { useToast } from "@/components/ui/toast";
 import { useUser } from "@/lib/user-context";
 import { api } from "@/lib/api";
+import { getInitials } from "@/lib/utils";
 
-function formatDate(date: Date) {
+function formatLongDate(date: Date) {
   return date.toLocaleDateString("en-US", {
     weekday: "long",
     year: "numeric",
@@ -34,7 +35,7 @@ function subscribeToDateChanges(onStoreChange: () => void) {
 }
 
 function getCurrentDateSnapshot() {
-  return formatDate(new Date());
+  return formatLongDate(new Date());
 }
 
 function getServerDateSnapshot() {
@@ -52,10 +53,6 @@ function timeAgo(dateString: string) {
   if (diffDays < 7) return `${diffDays} days ago`;
   if (diffDays < 30) return `${Math.floor(diffDays / 7)} weeks ago`;
   return `${Math.floor(diffDays / 30)} months ago`;
-}
-
-function getInitials(firstName: string, lastName: string) {
-  return `${firstName[0]}${lastName[0]}`;
 }
 
 const avatarColorClasses = [

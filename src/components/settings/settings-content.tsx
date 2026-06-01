@@ -84,8 +84,8 @@ function Toggle({
         <p className="text-sm font-medium text-slate-800 dark:text-slate-100">{label}</p>
         <p className="text-xs text-slate-400 dark:text-slate-500">{description}</p>
       </div>
-      <button onClick={onChange} className={`relative h-6 w-11 rounded-full transition ${checked ? "bg-indigo-600" : "bg-slate-300 dark:bg-slate-700"}`}>
-        <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white transition-transform ${checked ? "translate-x-5" : "translate-x-0.5"}`} />
+      <button onClick={onChange} className={`relative h-6 w-11 rounded-full transition ${checked ? "bg-indigo-600 dark:bg-indigo-500" : "bg-slate-300 dark:bg-slate-600"}`}>
+        <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition-transform ${checked ? "translate-x-5" : "translate-x-0.5"}`} />
       </button>
     </div>
   );

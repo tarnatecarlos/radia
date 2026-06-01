@@ -1,16 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { cookies } from "next/headers";
 import { getDb } from "@/lib/db";
-import { getSessionUser, getProfileByUserId, SESSION_COOKIE } from "@/lib/auth";
+import { getAuthProfile } from "@/lib/auth";
 import { DEFAULT_ALLOWED_INTEGRATIONS, getWorkspacePreferences } from "@/lib/workspace-preferences";
-
-async function getAuthProfile() {
-  const cookieStore = await cookies();
-  const sessionId = cookieStore.get(SESSION_COOKIE)?.value;
-  const session = getSessionUser(sessionId);
-  if (!session) return null;
-  return getProfileByUserId(session.userId) ?? null;
-}
 
 export async function GET() {
   try {

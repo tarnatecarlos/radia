@@ -1,8 +1,8 @@
 "use client";
 
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { api } from "@/lib/api";
-import type { Profile, Workspace, ServerAdmin, Integration, WorkspacePreferences } from "@/lib/types";
+import type { Profile, Workspace, ServerAdmin, Integration, WorkspacePreferences, ProfileSkill, Certification, ReviewCycle } from "@/lib/types";
 
 interface AuthMeResponse {
   profile: Profile | null;
@@ -10,70 +10,90 @@ interface AuthMeResponse {
   serverAdmins: ServerAdmin[];
   integrations: Integration[];
   preferences: WorkspacePreferences | null;
+  profileSkills: ProfileSkill[];
+  certifications: Certification[];
+  activeReviewCycle: ReviewCycle | null;
 }
 
-interface UserContextValue {
+interface UserState {
   profile: Profile | null;
   workspace: Workspace | null;
   serverAdmins: ServerAdmin[];
   integrations: Integration[];
   preferences: WorkspacePreferences | null;
+  profileSkills: ProfileSkill[];
+  certifications: Certification[];
+  activeReviewCycle: ReviewCycle | null;
   loading: boolean;
-  /** Re-fetch profile + workspace from DB */
-  refresh: () => Promise<void>;
 }
 
-const UserContext = createContext<UserContextValue>({
+interface UserContextValue extends UserState {
+  refresh: () => Promise<void>;
+  loadPerformanceData: () => Promise<void>;
+}
+
+const EMPTY_STATE: UserState = {
   profile: null,
   workspace: null,
   serverAdmins: [],
   integrations: [],
   preferences: null,
+  profileSkills: [],
+  certifications: [],
+  activeReviewCycle: null,
   loading: true,
+};
+
+const UserContext = createContext<UserContextValue>({
+  ...EMPTY_STATE,
   refresh: async () => {},
+  loadPerformanceData: async () => {},
 });
 
 export function useUser() {
   return useContext(UserContext);
 }
 
-export function UserProvider({ children }: { children: ReactNode }) {
-  const [profile, setProfile] = useState<Profile | null>(null);
-  const [workspace, setWorkspace] = useState<Workspace | null>(null);
-  const [serverAdmins, setServerAdmins] = useState<ServerAdmin[]>([]);
-  const [integrations, setIntegrations] = useState<Integration[]>([]);
-  const [preferences, setPreferences] = useState<WorkspacePreferences | null>(null);
-  const [loading, setLoading] = useState(true);
+function stateFromResponse(data: AuthMeResponse): UserState {
+  if (!data.profile) return { ...EMPTY_STATE, loading: false };
+  return {
+    profile: data.profile,
+    workspace: data.workspace ?? null,
+    serverAdmins: data.serverAdmins ?? [],
+    integrations: data.integrations ?? [],
+    preferences: data.preferences ?? null,
+    profileSkills: data.profileSkills ?? [],
+    certifications: data.certifications ?? [],
+    activeReviewCycle: data.activeReviewCycle ?? null,
+    loading: false,
+  };
+}
 
-  async function load() {
+export function UserProvider({ children }: { children: ReactNode }) {
+  const [state, setState] = useState<UserState>(EMPTY_STATE);
+
+  const load = useCallback(async () => {
     try {
       const data = await api<AuthMeResponse>("/auth/me");
-
-      if (!data.profile) {
-        setProfile(null);
-        setWorkspace(null);
-        setServerAdmins([]);
-        setIntegrations([]);
-        setPreferences(null);
-        setLoading(false);
-        return;
-      }
-
-      setProfile(data.profile);
-      setWorkspace(data.workspace ?? null);
-      setServerAdmins(data.serverAdmins ?? []);
-      setIntegrations(data.integrations ?? []);
-      setPreferences(data.preferences ?? null);
-      setLoading(false);
+      setState(stateFromResponse(data));
     } catch {
-      setProfile(null);
-      setWorkspace(null);
-      setServerAdmins([]);
-      setIntegrations([]);
-      setPreferences(null);
-      setLoading(false);
+      setState({ ...EMPTY_STATE, loading: false });
     }
-  }
+  }, []);
+
+  const loadPerformanceData = useCallback(async () => {
+    try {
+      const data = await api<AuthMeResponse>("/auth/me?include=performance");
+      setState(prev => ({
+        ...prev,
+        profileSkills: data.profileSkills ?? [],
+        certifications: data.certifications ?? [],
+        activeReviewCycle: data.activeReviewCycle ?? null,
+      }));
+    } catch {
+      // Silently fail — perf data is supplementary
+    }
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -81,32 +101,11 @@ export function UserProvider({ children }: { children: ReactNode }) {
     api<AuthMeResponse>("/auth/me")
       .then((data) => {
         if (cancelled) return;
-
-        if (!data.profile) {
-          setProfile(null);
-          setWorkspace(null);
-          setServerAdmins([]);
-          setIntegrations([]);
-          setPreferences(null);
-          setLoading(false);
-          return;
-        }
-
-        setProfile(data.profile);
-        setWorkspace(data.workspace ?? null);
-        setServerAdmins(data.serverAdmins ?? []);
-        setIntegrations(data.integrations ?? []);
-        setPreferences(data.preferences ?? null);
-        setLoading(false);
+        setState(stateFromResponse(data));
       })
       .catch(() => {
         if (cancelled) return;
-        setProfile(null);
-        setWorkspace(null);
-        setServerAdmins([]);
-        setIntegrations([]);
-        setPreferences(null);
-        setLoading(false);
+        setState({ ...EMPTY_STATE, loading: false });
       });
 
     return () => {
@@ -114,8 +113,13 @@ export function UserProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
+  const value = useMemo<UserContextValue>(
+    () => ({ ...state, refresh: load, loadPerformanceData }),
+    [state, load, loadPerformanceData]
+  );
+
   return (
-    <UserContext.Provider value={{ profile, workspace, serverAdmins, integrations, preferences, loading, refresh: load }}>
+    <UserContext.Provider value={value}>
       {children}
     </UserContext.Provider>
   );

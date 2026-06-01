@@ -28,7 +28,23 @@ export default function InvitePage() {
   useEffect(() => {
     async function checkInvite() {
       try {
-        // First check if user is logged in
+        // Validate the invite token
+        const inviteData = await api<{
+          workspace_name: string;
+          email: string;
+          role: string;
+          expired: boolean;
+        }>(`/invites?token=${token}`).catch(() => null);
+
+        if (!inviteData || inviteData.expired) {
+          setError(inviteData?.expired ? "This invite has expired" : "Invalid invite link");
+          setLoading(false);
+          return;
+        }
+
+        setInfo(inviteData);
+
+        // Check if user is logged in
         const me = await api<{ profile: unknown }>("/auth/me").catch(() => null);
         if (!me?.profile) {
           setNeedsAuth(true);
@@ -36,8 +52,6 @@ export default function InvitePage() {
           return;
         }
 
-        // Verify invite token is valid (we'll check by trying to accept)
-        setInfo({ workspace_name: "Workspace", role: "user", expired: false });
         setLoading(false);
       } catch {
         setError("Invalid invite link");
