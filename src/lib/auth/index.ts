@@ -23,10 +23,34 @@ export async function createSession(userId: string): Promise<string> {
   return sessionId;
 }
 
+/**
+ * Validate a session and return the user + profile in a SINGLE query.
+ * This replaces the old 3-step: getSessionUser → getProfileByUserId.
+ */
+export async function getAuthFromSession(sessionId: string | undefined) {
+  if (!sessionId) return null;
+  const db = getDb();
+
+  const { data, error } = await db
+    .from("sessions")
+    .select("user_id, users!inner(id, email), profiles:users!inner(profiles(*))")
+    .eq("id", sessionId)
+    .gt("expires_at", new Date().toISOString())
+    .maybeSingle();
+
+  if (error || !data) return null;
+
+  const user = data.users as unknown as { id: string; email: string };
+  const profilesArr = (data.profiles as unknown as { profiles: Record<string, unknown>[] })?.profiles;
+  const profile = profilesArr?.[0] ?? null;
+
+  return { userId: user.id, email: user.email, profile };
+}
+
+/** Simpler session check (no profile) — used by dashboard layout */
 export async function getSessionUser(sessionId: string | undefined): Promise<{ userId: string; email: string } | null> {
   if (!sessionId) return null;
   const db = getDb();
-  await maybeCleanExpiredSessions();
 
   const { data, error } = await db
     .from("sessions")
@@ -36,7 +60,6 @@ export async function getSessionUser(sessionId: string | undefined): Promise<{ u
     .maybeSingle();
 
   if (error || !data) return null;
-
   const userObj = data.users as unknown as { email: string };
   return { userId: data.user_id, email: userObj.email };
 }
@@ -51,13 +74,6 @@ export async function deleteAllSessions(userId: string): Promise<void> {
   await db.from("sessions").delete().eq("user_id", userId);
 }
 
-/** Probabilistic cleanup of expired sessions (~1% of calls) */
-export async function maybeCleanExpiredSessions(): Promise<void> {
-  if (Math.random() > 0.01) return;
-  const db = getDb();
-  await db.from("sessions").delete().lte("expires_at", new Date().toISOString());
-}
-
 export async function getProfileByUserId(userId: string) {
   const db = getDb();
   const { data, error } = await db.from("profiles").select("*").eq("user_id", userId).maybeSingle();
@@ -65,13 +81,34 @@ export async function getProfileByUserId(userId: string) {
   return data ?? undefined;
 }
 
+/**
+ * Server-side auth helper — reads session cookie, returns profile.
+ * Single DB round-trip via join.
+ */
 export async function getAuthProfile() {
   const { cookies } = await import("next/headers");
   const cookieStore = await cookies();
   const sessionId = cookieStore.get(SESSION_COOKIE)?.value;
-  const session = await getSessionUser(sessionId);
-  if (!session) return null;
-  return (await getProfileByUserId(session.userId)) ?? null;
+  if (!sessionId) return null;
+
+  const db = getDb();
+  const { data, error } = await db
+    .from("sessions")
+    .select("users!inner(profiles(*))")
+    .eq("id", sessionId)
+    .gt("expires_at", new Date().toISOString())
+    .maybeSingle();
+
+  if (error || !data) return null;
+
+  const nested = data.users as unknown as { profiles: Record<string, unknown>[] };
+  return nested?.profiles?.[0] ?? null;
+}
+
+/** Fire-and-forget expired session cleanup — call from cron, not hot path */
+export async function cleanExpiredSessions(): Promise<void> {
+  const db = getDb();
+  await db.from("sessions").delete().lte("expires_at", new Date().toISOString());
 }
 
 export function sessionCookieOptions() {

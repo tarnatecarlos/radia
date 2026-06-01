@@ -314,14 +314,8 @@ export function DashboardContent() {
     if (userLoading || !profile) return;
 
     let cancelled = false;
-    Promise.all([
-      api<Profile[]>("/profiles"),
-      api<Task[]>("/tasks"),
-      api<SOP[]>("/sops"),
-      api<Course[]>("/courses"),
-      api<CourseEnrollment[]>("/enrollments"),
-    ])
-      .then(([profiles, tasks, sopsData, courses, enrollments]) => {
+    api<{ profiles: Profile[]; tasks: Task[]; sops: { id: string }[]; courses: Course[]; enrollments: CourseEnrollment[] }>("/dashboard")
+      .then(({ profiles, tasks, sops: sopsData, courses, enrollments }) => {
         if (cancelled) return;
         setProfilesList(profiles);
         setTaskList(tasks);

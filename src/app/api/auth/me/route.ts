@@ -19,79 +19,48 @@ export async function GET(request: NextRequest) {
     }
 
     const db = getDb();
+    const wsId = profile.workspace_id as string;
+    const profileId = profile.id as string;
 
-    const { data: workspace } = await db
-      .from("workspaces")
-      .select("*")
-      .eq("id", profile.workspace_id as string)
-      .single();
-
-    const { data: serverAdmins } = await db
-      .from("server_admins")
-      .select("*")
-      .eq("profile_id", profile.id as string);
-
-    const { data: integrations } = await db
-      .from("integrations")
-      .select("*")
-      .eq("workspace_id", profile.workspace_id as string);
-
-    const preferences = await getWorkspacePreferences(profile.workspace_id as string);
+    // Run all 4 queries in parallel instead of sequentially
+    const [workspaceRes, adminsRes, integrationsRes, preferences] = await Promise.all([
+      db.from("workspaces").select("*").eq("id", wsId).single(),
+      db.from("server_admins").select("*").eq("profile_id", profileId),
+      db.from("integrations").select("*").eq("workspace_id", wsId),
+      getWorkspacePreferences(wsId),
+    ]);
 
     const result: Record<string, unknown> = {
       profile,
-      workspace,
-      serverAdmins: serverAdmins ?? [],
-      integrations: integrations ?? [],
+      workspace: workspaceRes.data,
+      serverAdmins: adminsRes.data ?? [],
+      integrations: integrationsRes.data ?? [],
       preferences,
       profileSkills: [],
       certifications: [],
       activeReviewCycle: null,
     };
 
-    // Only load performance data when requested (avoids hot-path bloat on every page)
     const url = new URL(request.url);
     if (url.searchParams.get("include") === "performance") {
-      const { data: profileSkills } = await db
-        .from("profile_skills")
-        .select("*, skills!inner(name, category)")
-        .eq("profile_id", profile.id as string);
+      // Run performance queries in parallel too
+      const [skillsRes, certsRes, cycleRes] = await Promise.all([
+        db.from("profile_skills").select("*, skills!inner(name, category)").eq("profile_id", profileId),
+        db.from("certifications").select("*, courses!inner(title)").eq("profile_id", profileId),
+        db.from("review_cycles").select("*").eq("workspace_id", wsId).eq("status", "active").order("start_date", { ascending: false }).limit(1).maybeSingle(),
+      ]);
 
-      // Flatten the joined skill fields to match the old SQL alias shape
-      result.profileSkills = (profileSkills ?? []).map((ps: Record<string, unknown>) => {
+      result.profileSkills = (skillsRes.data ?? []).map((ps: Record<string, unknown>) => {
         const skill = ps.skills as Record<string, unknown> | null;
-        return {
-          ...ps,
-          skill_name: skill?.name ?? null,
-          skill_category: skill?.category ?? null,
-          skills: undefined,
-        };
+        return { ...ps, skill_name: skill?.name ?? null, skill_category: skill?.category ?? null, skills: undefined };
       });
 
-      const { data: certifications } = await db
-        .from("certifications")
-        .select("*, courses!inner(title)")
-        .eq("profile_id", profile.id as string);
-
-      result.certifications = (certifications ?? []).map((cert: Record<string, unknown>) => {
+      result.certifications = (certsRes.data ?? []).map((cert: Record<string, unknown>) => {
         const course = cert.courses as Record<string, unknown> | null;
-        return {
-          ...cert,
-          course_title: course?.title ?? null,
-          courses: undefined,
-        };
+        return { ...cert, course_title: course?.title ?? null, courses: undefined };
       });
 
-      const { data: activeReviewCycle } = await db
-        .from("review_cycles")
-        .select("*")
-        .eq("workspace_id", profile.workspace_id as string)
-        .eq("status", "active")
-        .order("start_date", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-
-      result.activeReviewCycle = activeReviewCycle ?? null;
+      result.activeReviewCycle = cycleRes.data ?? null;
     }
 
     return NextResponse.json(result);
