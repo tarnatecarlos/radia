@@ -69,12 +69,39 @@ function stateFromResponse(data: AuthMeResponse): UserState {
   };
 }
 
+/**
+ * In-memory cache for the /auth/me response.
+ * Shared across navigations within the same SPA session so pages
+ * don't wait for a round-trip on every sidebar click.
+ * TTL: 60 seconds — after that a background refresh is triggered.
+ */
+let _cache: { data: AuthMeResponse; ts: number } | null = null;
+const CACHE_TTL = 60_000;
+
+async function fetchAuthMe(): Promise<AuthMeResponse> {
+  if (_cache && Date.now() - _cache.ts < CACHE_TTL) {
+    return _cache.data;
+  }
+  const data = await api<AuthMeResponse>("/auth/me");
+  _cache = { data, ts: Date.now() };
+  return data;
+}
+
+function invalidateCache() {
+  _cache = null;
+}
+
 export function UserProvider({ children }: { children: ReactNode }) {
-  const [state, setState] = useState<UserState>(EMPTY_STATE);
+  const [state, setState] = useState<UserState>(() => {
+    // Hydrate immediately from cache if available (instant on navigation)
+    if (_cache) return stateFromResponse(_cache.data);
+    return EMPTY_STATE;
+  });
 
   const load = useCallback(async () => {
     try {
-      const data = await api<AuthMeResponse>("/auth/me");
+      invalidateCache();
+      const data = await fetchAuthMe();
       setState(stateFromResponse(data));
     } catch {
       setState({ ...EMPTY_STATE, loading: false });
@@ -84,6 +111,7 @@ export function UserProvider({ children }: { children: ReactNode }) {
   const loadPerformanceData = useCallback(async () => {
     try {
       const data = await api<AuthMeResponse>("/auth/me?include=performance");
+      _cache = { data, ts: Date.now() };
       setState(prev => ({
         ...prev,
         profileSkills: data.profileSkills ?? [],
@@ -98,7 +126,18 @@ export function UserProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let cancelled = false;
 
-    api<AuthMeResponse>("/auth/me")
+    // If we have cached data, set it immediately (no loading state)
+    if (_cache && Date.now() - _cache.ts < CACHE_TTL) {
+      setState(stateFromResponse(_cache.data));
+      // Still refresh in background for freshness
+      fetchAuthMe()
+        .then((data) => { if (!cancelled) setState(stateFromResponse(data)); })
+        .catch(() => {});
+      return () => { cancelled = true; };
+    }
+
+    // No cache — fetch fresh
+    fetchAuthMe()
       .then((data) => {
         if (cancelled) return;
         setState(stateFromResponse(data));
@@ -108,9 +147,7 @@ export function UserProvider({ children }: { children: ReactNode }) {
         setState({ ...EMPTY_STATE, loading: false });
       });
 
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, []);
 
   const value = useMemo<UserContextValue>(

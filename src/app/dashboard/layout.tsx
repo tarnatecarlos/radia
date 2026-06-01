@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { getSessionUser, SESSION_COOKIE } from "@/lib/auth";
@@ -11,8 +12,13 @@ export default async function DashboardLayout({
 }) {
   const cookieStore = await cookies();
   const sessionId = cookieStore.get(SESSION_COOKIE)?.value;
-  const session = getSessionUser(sessionId);
 
+  if (!sessionId) {
+    redirect("/login");
+  }
+
+  // Verify session is valid (async Supabase call)
+  const session = await getSessionUser(sessionId);
   if (!session) {
     redirect("/login");
   }
@@ -27,7 +33,13 @@ export default async function DashboardLayout({
         <div className="flex min-w-0 flex-1 flex-col">
           <MobileNav />
           <main id="main-content" className="min-w-0 flex-1 overflow-y-auto px-4 py-4 sm:px-6 sm:py-5 lg:px-8">
-            {children}
+            <Suspense fallback={
+              <div className="flex min-h-[50vh] items-center justify-center">
+                <div className="h-6 w-6 animate-spin rounded-full border-2 border-indigo-600 border-t-transparent" />
+              </div>
+            }>
+              {children}
+            </Suspense>
           </main>
         </div>
       </div>
