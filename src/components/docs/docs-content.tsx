@@ -27,6 +27,7 @@ import {
   X,
   Rocket,
   CreditCard,
+  Database,
   Mail,
   Globe,
 } from "lucide-react";
@@ -857,73 +858,303 @@ const sections: Section[] = [
      ROADMAP & DEPLOYMENT
      ═══════════════════════════════════════════════ */
   {
-    id: "deployment",
-    title: "Deployment Guide",
+    id: "supabase",
+    title: "Supabase Setup",
+    icon: Database,
+    group: "roadmap",
+    content: () => (
+      <>
+        <H2>Supabase Database Setup</H2>
+        <P>Radia uses <strong>Supabase Postgres</strong> as its production database. The local dev environment uses SQLite for convenience, but Vercel&apos;s serverless functions cannot run native C++ addons like <code className="rounded bg-slate-100 px-1.5 py-0.5 text-xs dark:bg-slate-800">better-sqlite3</code>, so Supabase is required for deployment.</P>
+
+        <H3>Step 1: Create a Supabase Project</H3>
+        <Ol>
+          <li>Go to <strong>supabase.com/dashboard</strong> and click <strong>New Project</strong></li>
+          <li>Choose a name (e.g., <code className="rounded bg-slate-100 px-1.5 py-0.5 text-xs dark:bg-slate-800">radia-prod</code>) and a region close to your users</li>
+          <li>Set a strong database password &mdash; save it securely</li>
+          <li>Wait ~2 minutes for provisioning to complete</li>
+        </Ol>
+
+        <H3>Step 2: Run the Schema</H3>
+        <Ol>
+          <li>In the Supabase Dashboard, go to <strong>SQL Editor</strong></li>
+          <li>Click <strong>New Query</strong></li>
+          <li>Open the file <code className="rounded bg-slate-100 px-1.5 py-0.5 text-xs dark:bg-slate-800">supabase/schema.sql</code> from the project root and copy the entire contents</li>
+          <li>Paste into the SQL Editor and click <strong>Run</strong></li>
+          <li>Verify: go to <strong>Table Editor</strong> &mdash; you should see 23 tables</li>
+        </Ol>
+        <Tip>The schema file creates everything: tables, indexes, foreign keys, CHECK constraints, UNIQUE constraints, auto-update triggers, and subscription/coupon tables for Stripe.</Tip>
+
+        <H3>What the Schema Includes</H3>
+        <div className="my-4 overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-700">
+          <table className="w-full text-sm">
+            <thead><tr className="border-b border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800">
+              <th className="px-4 py-2 text-left text-xs font-semibold text-slate-600 dark:text-slate-300">Module</th>
+              <th className="px-4 py-2 text-left text-xs font-semibold text-slate-600 dark:text-slate-300">Tables</th>
+            </tr></thead>
+            <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+              {[
+                ["Identity", "users, sessions, workspaces, profiles"],
+                ["Operations", "tasks, sops, integrations, invites"],
+                ["Learning", "courses, lessons, course_enrollments, course_skills"],
+                ["Performance", "skills, profile_skills, review_cycles, objectives, reviews, review_skill_gaps, certifications"],
+                ["Admin", "server_admins, admin_requests, audit_log, notification_preferences, workspace_preferences, api_keys"],
+                ["Billing", "subscriptions, coupon_redemptions"],
+              ].map(([mod, tables], i) => (
+                <tr key={i}>
+                  <td className="px-4 py-2 font-medium text-slate-700 dark:text-slate-300">{mod}</td>
+                  <td className="px-4 py-2 text-xs text-slate-500 dark:text-slate-400">{tables}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <H3>Step 3: Get Your API Credentials</H3>
+        <P>Go to <strong>Settings &rarr; API</strong> in the Supabase Dashboard and copy these three values:</P>
+        <div className="my-4 overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-700">
+          <table className="w-full text-sm">
+            <thead><tr className="border-b border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800">
+              <th className="px-4 py-2 text-left text-xs font-semibold text-slate-600 dark:text-slate-300">Credential</th>
+              <th className="px-4 py-2 text-left text-xs font-semibold text-slate-600 dark:text-slate-300">Env Variable</th>
+              <th className="px-4 py-2 text-left text-xs font-semibold text-slate-600 dark:text-slate-300">Visibility</th>
+            </tr></thead>
+            <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+              {[
+                ["Project URL", "NEXT_PUBLIC_SUPABASE_URL", "Public (safe for browser)"],
+                ["anon public key", "NEXT_PUBLIC_SUPABASE_ANON_KEY", "Public (safe for browser)"],
+                ["service_role key", "SUPABASE_SERVICE_ROLE_KEY", "Secret (server-side only!)"],
+              ].map(([cred, env, vis], i) => (
+                <tr key={i}>
+                  <td className="px-4 py-2 font-medium text-slate-700 dark:text-slate-300">{cred}</td>
+                  <td className="px-4 py-2"><code className="rounded bg-slate-100 px-1.5 py-0.5 text-xs dark:bg-slate-800">{env}</code></td>
+                  <td className="px-4 py-2 text-xs text-slate-500 dark:text-slate-400">{vis}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <Warning>The <code className="rounded bg-slate-100 px-1.5 py-0.5 text-xs dark:bg-slate-800">service_role</code> key bypasses Row-Level Security. Never put it in a <code className="rounded bg-slate-100 px-1.5 py-0.5 text-xs dark:bg-slate-800">NEXT_PUBLIC_</code> variable. Only use it in server-side API routes.</Warning>
+
+        <H3>Step 4: Migrate the Code</H3>
+        <P>The key change is replacing synchronous SQLite calls with async Supabase client calls across all 24 API route files. Here are the patterns:</P>
+
+        <P><strong>SELECT (list rows):</strong></P>
+        <div className="my-3 overflow-hidden rounded-lg border border-slate-200 bg-slate-950 p-3 dark:border-slate-700">
+          <pre className="text-xs leading-relaxed text-slate-300">{`// SQLite (before)
+db.prepare("SELECT * FROM tasks WHERE workspace_id = ?").all(wsId)
+
+// Supabase (after)
+const { data } = await supabase.from('tasks').select('*').eq('workspace_id', wsId)`}</pre>
+        </div>
+
+        <P><strong>SELECT with JOIN:</strong></P>
+        <div className="my-3 overflow-hidden rounded-lg border border-slate-200 bg-slate-950 p-3 dark:border-slate-700">
+          <pre className="text-xs leading-relaxed text-slate-300">{`// SQLite
+db.prepare("SELECT t.*, p.first_name FROM tasks t JOIN profiles p ON p.id = t.assignee_id WHERE t.workspace_id = ?").all(wsId)
+
+// Supabase (foreign key joins)
+const { data } = await supabase
+  .from('tasks')
+  .select('*, assignee:profiles!assignee_id(first_name, last_name)')
+  .eq('workspace_id', wsId)`}</pre>
+        </div>
+
+        <P><strong>INSERT:</strong></P>
+        <div className="my-3 overflow-hidden rounded-lg border border-slate-200 bg-slate-950 p-3 dark:border-slate-700">
+          <pre className="text-xs leading-relaxed text-slate-300">{`// SQLite
+db.prepare("INSERT INTO tasks (id, workspace_id, title) VALUES (?, ?, ?)").run(id, wsId, title)
+
+// Supabase
+const { data } = await supabase.from('tasks').insert({ workspace_id: wsId, title }).select().single()`}</pre>
+        </div>
+
+        <P><strong>UPDATE:</strong></P>
+        <div className="my-3 overflow-hidden rounded-lg border border-slate-200 bg-slate-950 p-3 dark:border-slate-700">
+          <pre className="text-xs leading-relaxed text-slate-300">{`// SQLite
+db.prepare("UPDATE tasks SET status = ? WHERE id = ?").run(status, id)
+
+// Supabase
+const { data } = await supabase.from('tasks').update({ status }).eq('id', id).select().single()`}</pre>
+        </div>
+
+        <P><strong>DELETE:</strong></P>
+        <div className="my-3 overflow-hidden rounded-lg border border-slate-200 bg-slate-950 p-3 dark:border-slate-700">
+          <pre className="text-xs leading-relaxed text-slate-300">{`// SQLite
+db.prepare("DELETE FROM tasks WHERE id = ?").run(id)
+
+// Supabase
+await supabase.from('tasks').delete().eq('id', id)`}</pre>
+        </div>
+
+        <H3>Key Differences to Remember</H3>
+        <Ul>
+          <li><strong>Booleans</strong> &mdash; SQLite uses <code className="rounded bg-slate-100 px-1.5 py-0.5 text-xs dark:bg-slate-800">0/1</code>, Postgres uses native <code className="rounded bg-slate-100 px-1.5 py-0.5 text-xs dark:bg-slate-800">true/false</code>. Remove all <code className="rounded bg-slate-100 px-1.5 py-0.5 text-xs dark:bg-slate-800">!!(value as number)</code> conversions.</li>
+          <li><strong>JSON</strong> &mdash; SQLite stores JSON as TEXT strings requiring <code className="rounded bg-slate-100 px-1.5 py-0.5 text-xs dark:bg-slate-800">JSON.parse()</code>. Postgres JSONB is auto-parsed &mdash; no parsing needed.</li>
+          <li><strong>Dates</strong> &mdash; SQLite uses <code className="rounded bg-slate-100 px-1.5 py-0.5 text-xs dark:bg-slate-800">datetime(&apos;now&apos;)</code>. Postgres uses <code className="rounded bg-slate-100 px-1.5 py-0.5 text-xs dark:bg-slate-800">NOW()</code>, but Supabase handles defaults automatically on insert.</li>
+          <li><strong>UUIDs</strong> &mdash; You no longer need to call <code className="rounded bg-slate-100 px-1.5 py-0.5 text-xs dark:bg-slate-800">uid()</code> for IDs. Postgres generates them via <code className="rounded bg-slate-100 px-1.5 py-0.5 text-xs dark:bg-slate-800">gen_random_uuid()</code> default.</li>
+          <li><strong>Async</strong> &mdash; All Supabase queries are async. Add <code className="rounded bg-slate-100 px-1.5 py-0.5 text-xs dark:bg-slate-800">await</code> to every query call.</li>
+        </Ul>
+
+        <H3>Step 5: Clean Up</H3>
+        <P>After migrating all routes, remove the SQLite dependency:</P>
+        <div className="my-3 overflow-hidden rounded-lg border border-slate-200 bg-slate-950 p-3 dark:border-slate-700">
+          <pre className="text-xs leading-relaxed text-slate-300">{`npm uninstall better-sqlite3 @types/better-sqlite3`}</pre>
+        </div>
+        <P>And remove <code className="rounded bg-slate-100 px-1.5 py-0.5 text-xs dark:bg-slate-800">serverExternalPackages: [&quot;better-sqlite3&quot;]</code> from <code className="rounded bg-slate-100 px-1.5 py-0.5 text-xs dark:bg-slate-800">next.config.ts</code>.</P>
+      </>
+    ),
+  },
+  {
+    id: "vercel",
+    title: "Vercel Deployment",
     icon: Globe,
     group: "roadmap",
     content: () => (
       <>
-        <H2>Deployment Guide</H2>
-        <P>Radia deploys to <strong>Vercel</strong> with <strong>Supabase Postgres</strong> as the production database. Vercel handles builds, SSL, edge caching, and serverless functions automatically.</P>
+        <H2>Deploying to Vercel</H2>
+        <P>Vercel is the recommended hosting platform for Radia. It provides automatic builds, SSL, edge caching, serverless functions, and preview deployments for every pull request.</P>
 
         <H3>Production Architecture</H3>
         <div className="my-4 overflow-hidden rounded-lg border border-slate-200 bg-slate-950 p-4 dark:border-slate-700">
           <pre className="text-xs leading-relaxed text-slate-300">{`Users (Browser)
-    │ HTTPS (auto-SSL)
+    │ HTTPS (auto-SSL via Let's Encrypt)
     ▼
-Vercel Edge Network
-    │  Next.js 16 — Serverless Functions
+Vercel Edge Network (CDN + Serverless)
+    │  Next.js 16 — Static assets cached at edge
+    │  API Routes — Serverless functions (Node.js 20)
     │
-    ├──→ Supabase Postgres   (Database)
-    ├──→ Supabase Storage    (File Uploads)
-    ├──→ Stripe              (Subscriptions)
-    └──→ Resend              (Email)`}</pre>
+    ├──→ Supabase Postgres   (Database — connection pooling)
+    ├──→ Supabase Storage    (Avatars, attachments)
+    ├──→ Stripe              (Subscriptions, coupons, invoices)
+    └──→ Resend              (Transactional email)`}</pre>
         </div>
 
-        <H3>Vercel Setup (3 steps)</H3>
-        <Ol>
-          <li>Push your code to GitHub</li>
-          <li>Go to <strong>vercel.com/new</strong>, import the repo — Vercel auto-detects Next.js</li>
-          <li>Add environment variables (Supabase URL, keys, Stripe, Resend) and click <strong>Deploy</strong></li>
-        </Ol>
-        <Tip>Vercel auto-provisions SSL and gives you a <code className="rounded bg-slate-100 px-1.5 py-0.5 text-xs dark:bg-slate-800">.vercel.app</code> domain instantly. Add a custom domain in Settings later.</Tip>
+        <H3>Step 1: Push to GitHub</H3>
+        <P>Make sure your code is pushed to a GitHub repository. Vercel deploys directly from GitHub.</P>
+        <div className="my-3 overflow-hidden rounded-lg border border-slate-200 bg-slate-950 p-3 dark:border-slate-700">
+          <pre className="text-xs leading-relaxed text-slate-300">{`git add -A
+git commit -m "ready for Vercel deployment"
+git push origin main`}</pre>
+        </div>
 
-        <H3>Supabase Migration</H3>
-        <P>The local dev environment uses SQLite. For Vercel (serverless), you must migrate to Supabase Postgres because native C++ addons like <code className="rounded bg-slate-100 px-1.5 py-0.5 text-xs dark:bg-slate-800">better-sqlite3</code> cannot run in serverless functions.</P>
+        <H3>Step 2: Import in Vercel</H3>
         <Ol>
-          <li>Create a Supabase project at <strong>supabase.com/dashboard</strong></li>
-          <li>Run <code className="rounded bg-slate-100 px-1.5 py-0.5 text-xs dark:bg-slate-800">supabase/schema.sql</code> in the SQL Editor — creates all 23 tables</li>
-          <li>Replace the SQLite queries in each API route with Supabase client calls</li>
-          <li>Remove <code className="rounded bg-slate-100 px-1.5 py-0.5 text-xs dark:bg-slate-800">better-sqlite3</code> from package.json</li>
+          <li>Go to <strong>vercel.com/new</strong></li>
+          <li>Click <strong>Import Git Repository</strong> and select your repo</li>
+          <li>Vercel auto-detects Next.js &mdash; the defaults are correct:
+            <Ul>
+              <li><strong>Framework</strong>: Next.js</li>
+              <li><strong>Build Command</strong>: <code className="rounded bg-slate-100 px-1.5 py-0.5 text-xs dark:bg-slate-800">npm run build</code></li>
+              <li><strong>Output Directory</strong>: <code className="rounded bg-slate-100 px-1.5 py-0.5 text-xs dark:bg-slate-800">.next</code></li>
+            </Ul>
+          </li>
         </Ol>
-        <P>Full migration guide with code examples for every query pattern is in <code className="rounded bg-slate-100 px-1.5 py-0.5 text-xs dark:bg-slate-800">DEPLOYMENT.md</code>.</P>
+
+        <H3>Step 3: Set Environment Variables</H3>
+        <P>Before clicking Deploy, add these environment variables in the Vercel project settings:</P>
+        <div className="my-4 overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-700">
+          <table className="w-full text-sm">
+            <thead><tr className="border-b border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800">
+              <th className="px-4 py-2 text-left text-xs font-semibold text-slate-600 dark:text-slate-300">Variable</th>
+              <th className="px-4 py-2 text-left text-xs font-semibold text-slate-600 dark:text-slate-300">Value</th>
+              <th className="px-4 py-2 text-left text-xs font-semibold text-slate-600 dark:text-slate-300">Where to Find</th>
+            </tr></thead>
+            <tbody className="divide-y divide-slate-100 text-xs dark:divide-slate-800">
+              {[
+                ["NEXT_PUBLIC_SITE_URL", "https://your-app.vercel.app", "Your Vercel project URL"],
+                ["NEXT_PUBLIC_SUPABASE_URL", "https://xxx.supabase.co", "Supabase → Settings → API"],
+                ["NEXT_PUBLIC_SUPABASE_ANON_KEY", "eyJ...", "Supabase → Settings → API"],
+                ["SUPABASE_SERVICE_ROLE_KEY", "eyJ...", "Supabase → Settings → API"],
+                ["STRIPE_SECRET_KEY", "sk_live_...", "Stripe → Developers → API Keys"],
+                ["NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY", "pk_live_...", "Stripe → Developers → API Keys"],
+                ["STRIPE_WEBHOOK_SECRET", "whsec_...", "Stripe → Webhooks → Signing Secret"],
+                ["RESEND_API_KEY", "re_...", "Resend → API Keys"],
+                ["CRON_SECRET", "(random 64-char hex)", "Generate with: openssl rand -hex 32"],
+              ].map(([variable, value, where], i) => (
+                <tr key={i}>
+                  <td className="px-4 py-2 font-mono text-slate-700 dark:text-slate-300">{variable}</td>
+                  <td className="px-4 py-2 text-slate-500 dark:text-slate-400">{value}</td>
+                  <td className="px-4 py-2 text-slate-400 dark:text-slate-500">{where}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <Tip>Stripe and Resend variables are optional &mdash; the app works without them (billing and email features are simply disabled). You can add them later.</Tip>
+
+        <H3>Step 4: Deploy</H3>
+        <P>Click <strong>Deploy</strong>. Vercel will clone, install, build, and deploy in ~2 minutes. You&apos;ll get a live URL like <code className="rounded bg-slate-100 px-1.5 py-0.5 text-xs dark:bg-slate-800">your-app.vercel.app</code> immediately.</P>
+
+        <H3>Step 5: Custom Domain (Optional)</H3>
+        <Ol>
+          <li>Go to your Vercel project &rarr; <strong>Settings &rarr; Domains</strong></li>
+          <li>Add your domain (e.g., <code className="rounded bg-slate-100 px-1.5 py-0.5 text-xs dark:bg-slate-800">app.radiacorp.com</code>)</li>
+          <li>Update your DNS: add a <strong>CNAME</strong> record pointing to <code className="rounded bg-slate-100 px-1.5 py-0.5 text-xs dark:bg-slate-800">cname.vercel-dns.com</code></li>
+          <li>SSL is auto-provisioned &mdash; no configuration needed</li>
+        </Ol>
+
+        <H3>Step 6: Stripe Webhook (If Using Billing)</H3>
+        <Ol>
+          <li>Go to Stripe &rarr; <strong>Developers &rarr; Webhooks</strong></li>
+          <li>Click <strong>Add endpoint</strong></li>
+          <li>Enter: <code className="rounded bg-slate-100 px-1.5 py-0.5 text-xs dark:bg-slate-800">https://your-domain.com/api/billing/webhook</code></li>
+          <li>Select events: <code className="rounded bg-slate-100 px-1.5 py-0.5 text-xs dark:bg-slate-800">checkout.session.completed</code>, <code className="rounded bg-slate-100 px-1.5 py-0.5 text-xs dark:bg-slate-800">customer.subscription.updated</code>, <code className="rounded bg-slate-100 px-1.5 py-0.5 text-xs dark:bg-slate-800">customer.subscription.deleted</code>, <code className="rounded bg-slate-100 px-1.5 py-0.5 text-xs dark:bg-slate-800">invoice.payment_failed</code></li>
+          <li>Copy the <strong>Signing Secret</strong> and add it as <code className="rounded bg-slate-100 px-1.5 py-0.5 text-xs dark:bg-slate-800">STRIPE_WEBHOOK_SECRET</code> in Vercel</li>
+        </Ol>
+
+        <H3>Step 7: Daily Digest Cron (If Using Email)</H3>
+        <P>To enable daily digest emails, create a <code className="rounded bg-slate-100 px-1.5 py-0.5 text-xs dark:bg-slate-800">vercel.json</code> in the project root:</P>
+        <div className="my-3 overflow-hidden rounded-lg border border-slate-200 bg-slate-950 p-3 dark:border-slate-700">
+          <pre className="text-xs leading-relaxed text-slate-300">{`{
+  "crons": [{
+    "path": "/api/cron/digest",
+    "schedule": "0 8 * * *"
+  }]
+}`}</pre>
+        </div>
+        <P>This triggers the digest endpoint every day at 8 AM UTC.</P>
+
+        <H3>Automatic Deploys</H3>
+        <P>Every push to <code className="rounded bg-slate-100 px-1.5 py-0.5 text-xs dark:bg-slate-800">main</code> triggers an automatic production deployment. Pull requests get <strong>preview deployments</strong> with unique URLs &mdash; perfect for testing changes before merging.</P>
 
         <H3>Estimated Monthly Cost</H3>
         <div className="my-4 overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-700">
           <table className="w-full text-sm">
             <thead><tr className="border-b border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800">
               <th className="px-4 py-2 text-left text-xs font-semibold text-slate-600 dark:text-slate-300">Service</th>
-              <th className="px-4 py-2 text-left text-xs font-semibold text-slate-600 dark:text-slate-300">Tier</th>
-              <th className="px-4 py-2 text-right text-xs font-semibold text-slate-600 dark:text-slate-300">Cost</th>
+              <th className="px-4 py-2 text-left text-xs font-semibold text-slate-600 dark:text-slate-300">Free Tier</th>
+              <th className="px-4 py-2 text-right text-xs font-semibold text-slate-600 dark:text-slate-300">Pro Tier</th>
             </tr></thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
               {[
-                ["Vercel", "Hobby (free) / Pro", "$0 – $20"],
-                ["Supabase", "Free / Pro", "$0 – $25"],
-                ["Stripe", "Per transaction", "2.9% + $0.30"],
-                ["Resend", "Free (3K emails/mo)", "$0"],
-                ["Custom domain", "Annual", "~$12/yr"],
-              ].map(([service, tier, cost], i) => (
+                ["Vercel", "100GB bandwidth, serverless", "$20/mo (teams, analytics)"],
+                ["Supabase", "500MB DB, 1GB storage", "$25/mo (8GB DB, backups)"],
+                ["Stripe", "No monthly fee", "2.9% + $0.30 per txn"],
+                ["Resend", "3,000 emails/mo", "$20/mo (50K emails)"],
+                ["Domain", "—", "~$12/year"],
+              ].map(([service, free, pro], i) => (
                 <tr key={i}>
                   <td className="px-4 py-2 font-medium text-slate-700 dark:text-slate-300">{service}</td>
-                  <td className="px-4 py-2 text-slate-500 dark:text-slate-400">{tier}</td>
-                  <td className="px-4 py-2 text-right font-medium text-slate-900 dark:text-slate-100">{cost}</td>
+                  <td className="px-4 py-2 text-slate-500 dark:text-slate-400">{free}</td>
+                  <td className="px-4 py-2 text-right text-slate-500 dark:text-slate-400">{pro}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
-        <P>You can launch on <strong>$0/month</strong> using free tiers for all services.</P>
+        <P>Launch on <strong>$0/month</strong> with free tiers. Scale to ~$45/month as you grow.</P>
+
+        <H3>Post-Deploy Checklist</H3>
+        <Ul>
+          <li>Verify the app loads at your Vercel URL</li>
+          <li>Test login with your admin account</li>
+          <li>Create a task, SOP, and course to verify database connectivity</li>
+          <li>Test the invite flow end-to-end</li>
+          <li>Verify <code className="rounded bg-slate-100 px-1.5 py-0.5 text-xs dark:bg-slate-800">SUPABASE_SERVICE_ROLE_KEY</code> is not exposed in browser network requests</li>
+          <li>Enable Vercel Analytics in project settings</li>
+          <li>Set up Supabase backups (auto on Pro plan)</li>
+        </Ul>
       </>
     ),
   },
