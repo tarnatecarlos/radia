@@ -41,8 +41,8 @@ export async function getAuthFromSession(sessionId: string | undefined) {
   if (error || !data) return null;
 
   const user = data.users as unknown as { id: string; email: string };
-  const profilesArr = (data.profiles as unknown as { profiles: Record<string, unknown>[] })?.profiles;
-  const profile = profilesArr?.[0] ?? null;
+  const nested = (data.profiles as unknown as { profiles: Record<string, unknown> | Record<string, unknown>[] })?.profiles;
+  const profile = Array.isArray(nested) ? nested[0] ?? null : nested ?? null;
 
   return { userId: user.id, email: user.email, profile };
 }
@@ -101,8 +101,11 @@ export async function getAuthProfile() {
 
   if (error || !data) return null;
 
-  const nested = data.users as unknown as { profiles: Record<string, unknown>[] };
-  return nested?.profiles?.[0] ?? null;
+  const nested = data.users as unknown as { profiles: Record<string, unknown> | Record<string, unknown>[] };
+  const profiles = nested?.profiles;
+  // Supabase returns an object (not array) when the FK is UNIQUE
+  if (Array.isArray(profiles)) return profiles[0] ?? null;
+  return profiles ?? null;
 }
 
 /** Fire-and-forget expired session cleanup — call from cron, not hot path */
