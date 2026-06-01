@@ -278,12 +278,20 @@ type ModalType = "task" | "employee" | "sop" | null;
 export function DashboardContent() {
   const router = useRouter();
   const { toast } = useToast();
-  const { profile, preferences, loading: userLoading } = useUser();
+  const { profile: ctxProfile, preferences: ctxPreferences, loading: userLoading, refresh } = useUser();
   const currentDate = useSyncExternalStore(
     subscribeToDateChanges,
     getCurrentDateSnapshot,
     getServerDateSnapshot,
   );
+
+  // Local auth state from the consolidated endpoint (avoids waterfall)
+  const [localProfile, setLocalProfile] = useState<Profile | null>(null);
+  const [localPreferences, setLocalPreferences] = useState<typeof ctxPreferences>(null);
+
+  // Use local data if available, fall back to context
+  const profile = localProfile ?? ctxProfile;
+  const preferences = localPreferences ?? ctxPreferences;
 
   const [taskList, setTaskList] = useState<Task[]>([]);
   const [profilesList, setProfilesList] = useState<Profile[]>([]);
@@ -311,18 +319,29 @@ export function DashboardContent() {
   const [sopCategory, setSopCategory] = useState("General");
 
   useEffect(() => {
-    if (userLoading || !profile) return;
-
     let cancelled = false;
-    api<{ profiles: Profile[]; tasks: Task[]; sops: { id: string }[]; courses: Course[]; enrollments: CourseEnrollment[] }>("/dashboard")
-      .then(({ profiles, tasks, sops: sopsData, courses, enrollments }) => {
+
+    // Single API call — fetches auth context + dashboard data together
+    api<{
+      auth: { profile: Profile; workspace: unknown; serverAdmins: unknown[]; integrations: unknown[]; preferences: typeof ctxPreferences };
+      profiles: Profile[];
+      tasks: Task[];
+      sops: { id: string }[];
+      courses: Course[];
+      enrollments: CourseEnrollment[];
+    }>("/dashboard")
+      .then(({ auth, profiles, tasks, sops: sopsData, courses, enrollments }) => {
         if (cancelled) return;
+        setLocalProfile(auth.profile);
+        setLocalPreferences(auth.preferences);
         setProfilesList(profiles);
         setTaskList(tasks);
         setSopCount(sopsData.length);
         setCoursesList(courses);
         setEnrollmentsList(enrollments);
         setDataLoading(false);
+        // Also hydrate the UserContext so sidebar/other components have data
+        refresh();
       })
       .catch(() => {
         if (cancelled) return;
@@ -333,9 +352,9 @@ export function DashboardContent() {
     return () => {
       cancelled = true;
     };
-  }, [userLoading, profile, toast]);
+  }, [toast, refresh]);
 
-  if (userLoading || dataLoading) {
+  if (dataLoading && !profile) {
     return (
       <div className="flex min-h-[50vh] items-center justify-center">
         <div className="text-sm text-slate-400">Loading dashboard...</div>
