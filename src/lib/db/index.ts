@@ -8,12 +8,11 @@ let _client: SupabaseClient | null = null;
  */
 export function getDb(): SupabaseClient {
   if (!_client) {
-    const url = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
+    const url = process.env.SUPABASE_URL;
     const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
     if (!url || !key) {
       throw new Error(
-        "Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY environment variables. " +
-        "Set NEXT_PUBLIC_SUPABASE_URL (or SUPABASE_URL) and SUPABASE_SERVICE_ROLE_KEY."
+        "Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY environment variables."
       );
     }
     _client = createClient(url, key, {
