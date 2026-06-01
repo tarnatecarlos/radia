@@ -12,25 +12,34 @@ export async function GET(request: NextRequest) {
     const url = new URL(request.url);
     const profileId = url.searchParams.get("profile_id");
 
-    let query = `SELECT cert.*,
-                   c.title as course_title, c.description as course_description,
-                   s.name as skill_name, s.category as skill_category
-                 FROM certifications cert
-                 JOIN courses c ON c.id = cert.course_id
-                 LEFT JOIN skills s ON s.id = cert.skill_id
-                 JOIN profiles p ON p.id = cert.profile_id
-                 WHERE p.workspace_id = ?`;
-    const params: unknown[] = [profile.workspace_id as string];
+    let query = db
+      .from("certifications")
+      .select(
+        `*,
+         courses!inner(title, description),
+         skills(name, category),
+         profiles!inner(workspace_id)`
+      )
+      .eq("profiles.workspace_id", profile.workspace_id as string);
 
-    if (profileId) { query += " AND cert.profile_id = ?"; params.push(profileId); }
-    query += " ORDER BY cert.issued_at DESC";
+    if (profileId) query = query.eq("profile_id", profileId);
+    query = query.order("issued_at", { ascending: false });
 
-    const rows = db.prepare(query).all(...params) as Record<string, unknown>[];
-    const result = rows.map(r => ({
-      ...r,
-      course: { title: r.course_title, description: r.course_description },
-      skill: r.skill_name ? { name: r.skill_name, category: r.skill_category } : null,
-    }));
+    const { data: rows, error } = await query;
+    if (error) throw error;
+
+    const result = (rows || []).map((r: Record<string, unknown>) => {
+      const course = r.courses as { title: string; description: string };
+      const skill = r.skills as { name: string; category: string } | null;
+      return {
+        ...r,
+        course: { title: course.title, description: course.description },
+        skill: skill ? { name: skill.name, category: skill.category } : null,
+        courses: undefined,
+        skills: undefined,
+        profiles: undefined,
+      };
+    });
     return NextResponse.json(result);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Internal error";

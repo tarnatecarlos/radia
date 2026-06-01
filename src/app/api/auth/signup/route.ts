@@ -20,9 +20,12 @@ export async function POST(request: NextRequest) {
 
     const db = getDb();
 
-    const existing = db
-      .prepare("SELECT id FROM users WHERE email = ?")
-      .get(email);
+    const { data: existing } = await db
+      .from("users")
+      .select("id")
+      .eq("email", email)
+      .maybeSingle();
+
     if (existing) {
       return NextResponse.json(
         { error: "Email already registered" },
@@ -32,25 +35,35 @@ export async function POST(request: NextRequest) {
 
     const userId = uid();
     const hash = await hashPassword(password);
-    db.prepare(
-      "INSERT INTO users (id, email, password_hash) VALUES (?, ?, ?)"
-    ).run(userId, email, hash);
+    const { error: userErr } = await db
+      .from("users")
+      .insert({ id: userId, email, password_hash: hash });
+    if (userErr) throw new Error(`Failed to create user: ${userErr.message}`);
 
     const workspaceId = uid();
     const subdomain = `${firstName.toLowerCase()}-${uid().slice(0, 8)}`;
-    db.prepare(
-      "INSERT INTO workspaces (id, name, subdomain) VALUES (?, ?, ?)"
-    ).run(workspaceId, `${firstName}'s Workspace`, subdomain);
+    const { error: wsErr } = await db
+      .from("workspaces")
+      .insert({ id: workspaceId, name: `${firstName}'s Workspace`, subdomain });
+    if (wsErr) throw new Error(`Failed to create workspace: ${wsErr.message}`);
 
     const profileId = uid();
-    db.prepare(
-      `INSERT INTO profiles (id, user_id, workspace_id, email, first_name, last_name, role, setup_completed)
-       VALUES (?, ?, ?, ?, ?, ?, 'creator', 0)`
-    ).run(profileId, userId, workspaceId, email, firstName, lastName);
+    const { error: profErr } = await db.from("profiles").insert({
+      id: profileId,
+      user_id: userId,
+      workspace_id: workspaceId,
+      email,
+      first_name: firstName,
+      last_name: lastName,
+      role: "creator",
+      setup_completed: false,
+    });
+    if (profErr) throw new Error(`Failed to create profile: ${profErr.message}`);
 
-    db.prepare(
-      `INSERT INTO notification_preferences (id, profile_id) VALUES (?, ?)`
-    ).run(uid(), profileId);
+    const { error: notifErr } = await db
+      .from("notification_preferences")
+      .insert({ id: uid(), profile_id: profileId });
+    if (notifErr) throw new Error(`Failed to create notification preferences: ${notifErr.message}`);
 
     const platforms = [
       "slack",
@@ -60,17 +73,22 @@ export async function POST(request: NextRequest) {
       "teams",
       "messenger",
     ];
-    const insertIntegration = db.prepare(
-      "INSERT INTO integrations (id, workspace_id, platform_name, is_active) VALUES (?, ?, ?, 0)"
-    );
-    for (const platform of platforms) {
-      insertIntegration.run(uid(), workspaceId, platform);
-    }
+    const integrationRows = platforms.map((platform) => ({
+      id: uid(),
+      workspace_id: workspaceId,
+      platform_name: platform,
+      is_active: false,
+    }));
+    const { error: intErr } = await db.from("integrations").insert(integrationRows);
+    if (intErr) throw new Error(`Failed to create integrations: ${intErr.message}`);
 
     // Create default workspace preferences
-    db.prepare("INSERT INTO workspace_preferences (id, workspace_id) VALUES (?, ?)").run(uid(), workspaceId);
+    const { error: wpErr } = await db
+      .from("workspace_preferences")
+      .insert({ id: uid(), workspace_id: workspaceId });
+    if (wpErr) throw new Error(`Failed to create workspace preferences: ${wpErr.message}`);
 
-    const sessionId = createSession(userId);
+    const sessionId = await createSession(userId);
     const cookieStore = await cookies();
     cookieStore.set(SESSION_COOKIE, sessionId, sessionCookieOptions());
 

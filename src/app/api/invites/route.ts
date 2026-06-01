@@ -10,21 +10,21 @@ export async function GET(request: NextRequest) {
     // Public token validation endpoint (no auth needed)
     if (token) {
       const db = getDb();
-      const invite = db
-        .prepare(
-          `SELECT i.*, w.name as workspace_name FROM invites i
-           JOIN workspaces w ON w.id = i.workspace_id
-           WHERE i.token = ?`
-        )
-        .get(token) as Record<string, unknown> | undefined;
+      const { data: invite, error } = await db
+        .from("invites")
+        .select("*, workspaces!inner(name)")
+        .eq("token", token)
+        .maybeSingle();
 
+      if (error) throw error;
       if (!invite) {
         return NextResponse.json({ error: "Invalid invite" }, { status: 404 });
       }
 
+      const workspace = invite.workspaces as { name: string };
       const expired = !!(invite.accepted_at) || new Date(invite.expires_at as string) <= new Date();
       return NextResponse.json({
-        workspace_name: invite.workspace_name,
+        workspace_name: workspace.name,
         email: invite.email || null,
         role: invite.role,
         expired,
@@ -38,12 +38,14 @@ export async function GET(request: NextRequest) {
     }
 
     const db = getDb();
-    const invites = db
-      .prepare(
-        "SELECT * FROM invites WHERE workspace_id = ? AND accepted_at IS NULL ORDER BY created_at DESC"
-      )
-      .all(profile.workspace_id as string);
+    const { data: invites, error } = await db
+      .from("invites")
+      .select("*")
+      .eq("workspace_id", profile.workspace_id as string)
+      .is("accepted_at", null)
+      .order("created_at", { ascending: false });
 
+    if (error) throw error;
     return NextResponse.json(invites);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Internal error";
@@ -68,18 +70,17 @@ export async function POST(request: NextRequest) {
       Date.now() + 7 * 24 * 60 * 60 * 1000
     ).toISOString();
 
-    db.prepare(
-      `INSERT INTO invites (id, workspace_id, email, token, role, invited_by, expires_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
-    ).run(
+    const { error } = await db.from("invites").insert({
       id,
-      profile.workspace_id as string,
-      email || null,
+      workspace_id: profile.workspace_id as string,
+      email: email || null,
       token,
-      role || "user",
-      profile.id as string,
-      expiresAt
-    );
+      role: role || "user",
+      invited_by: profile.id as string,
+      expires_at: expiresAt,
+    });
+
+    if (error) throw error;
 
     return NextResponse.json({
       token,
@@ -107,12 +108,15 @@ export async function PATCH(request: NextRequest) {
     }
 
     const db = getDb();
-    const invite = db
-      .prepare(
-        "SELECT * FROM invites WHERE token = ? AND accepted_at IS NULL AND expires_at > datetime('now')"
-      )
-      .get(token) as Record<string, unknown> | undefined;
+    const { data: invite, error: fetchErr } = await db
+      .from("invites")
+      .select("*")
+      .eq("token", token)
+      .is("accepted_at", null)
+      .gt("expires_at", new Date().toISOString())
+      .maybeSingle();
 
+    if (fetchErr) throw fetchErr;
     if (!invite) {
       return NextResponse.json(
         { error: "Invalid or expired invite" },
@@ -121,18 +125,23 @@ export async function PATCH(request: NextRequest) {
     }
 
     // Move the current user's profile to the invite's workspace
-    db.prepare(
-      "UPDATE profiles SET workspace_id = ?, role = ? WHERE id = ?"
-    ).run(
-      invite.workspace_id as string,
-      invite.role as string,
-      profile.id as string
-    );
+    const { error: profileErr } = await db
+      .from("profiles")
+      .update({
+        workspace_id: invite.workspace_id as string,
+        role: invite.role as string,
+      })
+      .eq("id", profile.id as string);
+
+    if (profileErr) throw profileErr;
 
     // Mark invite as accepted
-    db.prepare(
-      "UPDATE invites SET accepted_at = datetime('now') WHERE id = ?"
-    ).run(invite.id as string);
+    const { error: inviteErr } = await db
+      .from("invites")
+      .update({ accepted_at: new Date().toISOString() })
+      .eq("id", invite.id as string);
+
+    if (inviteErr) throw inviteErr;
 
     return NextResponse.json({ ok: true });
   } catch (err: unknown) {

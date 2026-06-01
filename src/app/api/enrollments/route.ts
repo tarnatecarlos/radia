@@ -2,15 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { getDb, uid } from "@/lib/db";
 import { getAuthProfile } from "@/lib/auth";
 
-function parseEnrollment(row: Record<string, unknown>) {
-  return {
-    ...row,
-    completed_lessons: JSON.parse(
-      (row.completed_lessons as string) || "[]"
-    ),
-  };
-}
-
 export async function GET() {
   try {
     const profile = await getAuthProfile();
@@ -19,11 +10,13 @@ export async function GET() {
     }
 
     const db = getDb();
-    const rows = db
-      .prepare("SELECT * FROM course_enrollments WHERE profile_id = ?")
-      .all(profile.id as string) as Record<string, unknown>[];
+    const { data: rows, error } = await db
+      .from("course_enrollments")
+      .select("*")
+      .eq("profile_id", profile.id as string);
 
-    return NextResponse.json(rows.map(parseEnrollment));
+    if (error) throw error;
+    return NextResponse.json(rows);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Internal error";
     return NextResponse.json({ error: message }, { status: 500 });
@@ -47,17 +40,19 @@ export async function POST(request: NextRequest) {
 
     const db = getDb();
     const id = uid();
-    const lessonsJson = JSON.stringify(completed_lessons || []);
-    db.prepare(
-      `INSERT INTO course_enrollments (id, profile_id, course_id, completed_lessons)
-       VALUES (?, ?, ?, ?)`
-    ).run(id, profile.id as string, course_id, lessonsJson);
+    const { data: row, error } = await db
+      .from("course_enrollments")
+      .insert({
+        id,
+        profile_id: profile.id as string,
+        course_id,
+        completed_lessons: completed_lessons || [],
+      })
+      .select()
+      .single();
 
-    const row = db
-      .prepare("SELECT * FROM course_enrollments WHERE id = ?")
-      .get(id) as Record<string, unknown>;
-
-    return NextResponse.json(parseEnrollment(row));
+    if (error) throw error;
+    return NextResponse.json(row);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Internal error";
     return NextResponse.json({ error: message }, { status: 500 });
@@ -77,12 +72,14 @@ export async function PATCH(request: NextRequest) {
     }
 
     const db = getDb();
-    const existing = db
-      .prepare(
-        "SELECT * FROM course_enrollments WHERE id = ? AND profile_id = ?"
-      )
-      .get(id, profile.id as string);
+    const { data: existing, error: fetchErr } = await db
+      .from("course_enrollments")
+      .select("*")
+      .eq("id", id)
+      .eq("profile_id", profile.id as string)
+      .maybeSingle();
 
+    if (fetchErr) throw fetchErr;
     if (!existing) {
       return NextResponse.json(
         { error: "Enrollment not found" },
@@ -90,90 +87,123 @@ export async function PATCH(request: NextRequest) {
       );
     }
 
-    const lessonsJson = JSON.stringify(completed_lessons || []);
+    const courseId = existing.course_id as string;
 
-    // Check if all lessons in the course are completed
-    const enrollment = existing as Record<string, unknown>;
-    const courseId = enrollment.course_id as string;
-    const totalLessons = db
-      .prepare("SELECT COUNT(*) as count FROM lessons WHERE course_id = ?")
-      .get(courseId) as { count: number };
+    // Count total lessons for the course
+    const { count: totalLessons, error: countErr } = await db
+      .from("lessons")
+      .select("*", { count: "exact", head: true })
+      .eq("course_id", courseId);
+
+    if (countErr) throw countErr;
 
     const completedAt =
       completed_lessons &&
-      completed_lessons.length >= totalLessons.count &&
-      totalLessons.count > 0
-        ? "datetime('now')"
+      completed_lessons.length >= (totalLessons ?? 0) &&
+      (totalLessons ?? 0) > 0
+        ? new Date().toISOString()
         : null;
 
-    const justCompleted = !!(
-      completedAt &&
-      !(enrollment.completed_at as string | null)
-    );
+    const justCompleted = !!(completedAt && !existing.completed_at);
 
-    const runUpdate = db.transaction(() => {
-      if (completedAt) {
-        db.prepare(
-          `UPDATE course_enrollments SET completed_lessons = ?, completed_at = datetime('now') WHERE id = ?`
-        ).run(lessonsJson, id);
-      } else {
-        db.prepare(
-          `UPDATE course_enrollments SET completed_lessons = ?, completed_at = NULL WHERE id = ?`
-        ).run(lessonsJson, id);
-      }
+    // Update the enrollment
+    const updatePayload: Record<string, unknown> = {
+      completed_lessons: completed_lessons || [],
+      completed_at: completedAt,
+    };
 
-      // Profile enrichment: on course completion, issue certification + update skills
-      if (justCompleted) {
-        const profileId = enrollment.profile_id as string;
+    const { error: updateErr } = await db
+      .from("course_enrollments")
+      .update(updatePayload)
+      .eq("id", id);
 
-        db.prepare(
-          `INSERT OR IGNORE INTO certifications (id, profile_id, course_id, issued_at)
-           VALUES (?, ?, ?, datetime('now'))`
-        ).run(uid(), profileId, courseId);
+    if (updateErr) throw updateErr;
 
-        const courseSkills = db.prepare(
-          "SELECT skill_id FROM course_skills WHERE course_id = ?"
-        ).all(courseId) as { skill_id: string }[];
+    // Profile enrichment: on course completion, issue certification + update skills
+    if (justCompleted) {
+      const profileId = existing.profile_id as string;
 
-        for (const cs of courseSkills) {
-          db.prepare(
-            `UPDATE certifications SET skill_id = ? WHERE profile_id = ? AND course_id = ? AND skill_id IS NULL`
-          ).run(cs.skill_id, profileId, courseId);
+      // Insert certification (ignore conflict)
+      await db
+        .from("certifications")
+        .upsert(
+          { id: uid(), profile_id: profileId, course_id: courseId },
+          { onConflict: "profile_id,course_id" }
+        );
 
-          const existing = db.prepare(
-            "SELECT id, proficiency FROM profile_skills WHERE profile_id = ? AND skill_id = ?"
-          ).get(profileId, cs.skill_id) as { id: string; proficiency: string } | undefined;
+      // Get course skills
+      const { data: courseSkills } = await db
+        .from("course_skills")
+        .select("skill_id")
+        .eq("course_id", courseId);
 
-          if (existing) {
-            const levels = ["beginner", "intermediate", "advanced", "expert"];
-            if (levels.indexOf(existing.proficiency) < levels.indexOf("intermediate")) {
-              db.prepare(
-                "UPDATE profile_skills SET proficiency = 'intermediate', source = 'certification', verified_at = datetime('now') WHERE id = ?"
-              ).run(existing.id);
-            }
-          } else {
-            db.prepare(
-              `INSERT INTO profile_skills (id, profile_id, skill_id, proficiency, source, verified_at)
-               VALUES (?, ?, ?, 'intermediate', 'certification', datetime('now'))`
-            ).run(uid(), profileId, cs.skill_id);
+      for (const cs of courseSkills || []) {
+        // Link skill to certification
+        await db
+          .from("certifications")
+          .update({ skill_id: cs.skill_id })
+          .eq("profile_id", profileId)
+          .eq("course_id", courseId)
+          .is("skill_id", null);
+
+        // Check existing profile skill
+        const { data: existingSkill } = await db
+          .from("profile_skills")
+          .select("id, proficiency")
+          .eq("profile_id", profileId)
+          .eq("skill_id", cs.skill_id)
+          .maybeSingle();
+
+        if (existingSkill) {
+          const levels = ["beginner", "intermediate", "advanced", "expert"];
+          if (levels.indexOf(existingSkill.proficiency) < levels.indexOf("intermediate")) {
+            await db
+              .from("profile_skills")
+              .update({
+                proficiency: "intermediate",
+                source: "certification",
+                verified_at: new Date().toISOString(),
+              })
+              .eq("id", existingSkill.id);
           }
+        } else {
+          await db.from("profile_skills").insert({
+            id: uid(),
+            profile_id: profileId,
+            skill_id: cs.skill_id,
+            proficiency: "intermediate",
+            source: "certification",
+            verified_at: new Date().toISOString(),
+          });
+        }
 
-          db.prepare(
-            `UPDATE review_skill_gaps SET resolved = 1
-             WHERE skill_id = ? AND review_id IN (
-               SELECT id FROM reviews WHERE reviewee_id = ?
-             ) AND resolved = 0`
-          ).run(cs.skill_id, profileId);
+        // Resolve skill gaps: get review IDs for reviewee, then update gaps
+        const { data: reviewRows } = await db
+          .from("reviews")
+          .select("id")
+          .eq("reviewee_id", profileId);
+
+        const reviewIds = (reviewRows || []).map((r: { id: string }) => r.id);
+        if (reviewIds.length > 0) {
+          await db
+            .from("review_skill_gaps")
+            .update({ resolved: true })
+            .eq("skill_id", cs.skill_id)
+            .in("review_id", reviewIds)
+            .eq("resolved", false);
         }
       }
-    });
-    runUpdate();
+    }
 
-    const updated = db
-      .prepare("SELECT * FROM course_enrollments WHERE id = ?")
-      .get(id) as Record<string, unknown>;
+    // Fetch updated enrollment
+    const { data: updated, error: refetchErr } = await db
+      .from("course_enrollments")
+      .select("*")
+      .eq("id", id)
+      .single();
 
-    return NextResponse.json(parseEnrollment(updated));
+    if (refetchErr) throw refetchErr;
+    return NextResponse.json(updated);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Internal error";
     return NextResponse.json({ error: message }, { status: 500 });

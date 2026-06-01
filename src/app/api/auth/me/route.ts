@@ -8,44 +8,41 @@ export async function GET(request: NextRequest) {
   try {
     const cookieStore = await cookies();
     const sessionId = cookieStore.get(SESSION_COOKIE)?.value;
-    const session = getSessionUser(sessionId);
+    const session = await getSessionUser(sessionId);
     if (!session) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const profile = getProfileByUserId(session.userId);
+    const profile = await getProfileByUserId(session.userId);
     if (!profile) {
       return NextResponse.json({ error: "Profile not found" }, { status: 404 });
     }
 
     const db = getDb();
 
-    const workspace = db
-      .prepare("SELECT * FROM workspaces WHERE id = ?")
-      .get(profile.workspace_id as string);
+    const { data: workspace } = await db
+      .from("workspaces")
+      .select("*")
+      .eq("id", profile.workspace_id as string)
+      .single();
 
-    const serverAdmins = db
-      .prepare("SELECT * FROM server_admins WHERE profile_id = ?")
-      .all(profile.id as string);
+    const { data: serverAdmins } = await db
+      .from("server_admins")
+      .select("*")
+      .eq("profile_id", profile.id as string);
 
-    const integrations = db
-      .prepare("SELECT * FROM integrations WHERE workspace_id = ?")
-      .all(profile.workspace_id as string) as Record<string, unknown>[];
+    const { data: integrations } = await db
+      .from("integrations")
+      .select("*")
+      .eq("workspace_id", profile.workspace_id as string);
 
-    const preferences = getWorkspacePreferences(profile.workspace_id as string);
+    const preferences = await getWorkspacePreferences(profile.workspace_id as string);
 
     const result: Record<string, unknown> = {
-      profile: {
-        ...profile,
-        onboarding_completed: !!(profile.onboarding_completed as number),
-        setup_completed: !!(profile.setup_completed as number),
-      },
+      profile,
       workspace,
-      serverAdmins,
-      integrations: integrations.map((i) => ({
-        ...i,
-        is_active: !!(i.is_active as number),
-      })),
+      serverAdmins: serverAdmins ?? [],
+      integrations: integrations ?? [],
       preferences,
       profileSkills: [],
       certifications: [],
@@ -55,31 +52,46 @@ export async function GET(request: NextRequest) {
     // Only load performance data when requested (avoids hot-path bloat on every page)
     const url = new URL(request.url);
     if (url.searchParams.get("include") === "performance") {
-      result.profileSkills = db
-        .prepare(
-          `SELECT ps.*, s.name as skill_name, s.category as skill_category
-           FROM profile_skills ps
-           JOIN skills s ON s.id = ps.skill_id
-           WHERE ps.profile_id = ?`
-        )
-        .all(profile.id as string);
+      const { data: profileSkills } = await db
+        .from("profile_skills")
+        .select("*, skills!inner(name, category)")
+        .eq("profile_id", profile.id as string);
 
-      result.certifications = db
-        .prepare(
-          `SELECT cert.*, c.title as course_title
-           FROM certifications cert
-           JOIN courses c ON c.id = cert.course_id
-           WHERE cert.profile_id = ?`
-        )
-        .all(profile.id as string);
+      // Flatten the joined skill fields to match the old SQL alias shape
+      result.profileSkills = (profileSkills ?? []).map((ps: Record<string, unknown>) => {
+        const skill = ps.skills as Record<string, unknown> | null;
+        return {
+          ...ps,
+          skill_name: skill?.name ?? null,
+          skill_category: skill?.category ?? null,
+          skills: undefined,
+        };
+      });
 
-      result.activeReviewCycle = db
-        .prepare(
-          `SELECT * FROM review_cycles
-           WHERE workspace_id = ? AND status = 'active'
-           ORDER BY start_date DESC LIMIT 1`
-        )
-        .get(profile.workspace_id as string) ?? null;
+      const { data: certifications } = await db
+        .from("certifications")
+        .select("*, courses!inner(title)")
+        .eq("profile_id", profile.id as string);
+
+      result.certifications = (certifications ?? []).map((cert: Record<string, unknown>) => {
+        const course = cert.courses as Record<string, unknown> | null;
+        return {
+          ...cert,
+          course_title: course?.title ?? null,
+          courses: undefined,
+        };
+      });
+
+      const { data: activeReviewCycle } = await db
+        .from("review_cycles")
+        .select("*")
+        .eq("workspace_id", profile.workspace_id as string)
+        .eq("status", "active")
+        .order("start_date", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      result.activeReviewCycle = activeReviewCycle ?? null;
     }
 
     return NextResponse.json(result);

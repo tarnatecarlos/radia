@@ -13,7 +13,6 @@ export async function GET(request: NextRequest) {
     const url = new URL(request.url);
     const fields = url.searchParams.get("fields");
 
-    let rows: Record<string, unknown>[];
     if (fields) {
       const allowed = [
         "id",
@@ -41,28 +40,20 @@ export async function GET(request: NextRequest) {
           { status: 400 }
         );
       }
-      rows = db
-        .prepare(
-          `SELECT ${selected.join(", ")} FROM profiles WHERE workspace_id = ?`
-        )
-        .all(profile.workspace_id as string) as Record<string, unknown>[];
+      const { data } = await db
+        .from("profiles")
+        .select(selected.join(", "))
+        .eq("workspace_id", profile.workspace_id as string);
+
+      return NextResponse.json(data);
     } else {
-      rows = db
-        .prepare("SELECT * FROM profiles WHERE workspace_id = ?")
-        .all(profile.workspace_id as string) as Record<string, unknown>[];
+      const { data } = await db
+        .from("profiles")
+        .select("*")
+        .eq("workspace_id", profile.workspace_id as string);
+
+      return NextResponse.json(data);
     }
-
-    const result = rows.map((r) => ({
-      ...r,
-      ...(r.onboarding_completed !== undefined && {
-        onboarding_completed: !!(r.onboarding_completed as number),
-      }),
-      ...(r.setup_completed !== undefined && {
-        setup_completed: !!(r.setup_completed as number),
-      }),
-    }));
-
-    return NextResponse.json(result);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Internal error";
     return NextResponse.json({ error: message }, { status: 500 });
@@ -87,43 +78,48 @@ export async function POST(request: NextRequest) {
 
     const db = getDb();
     const newId = uid();
-    db.prepare(
-      `INSERT INTO profiles (id, workspace_id, email, first_name, last_name, role, title, manager_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(
-      newId,
-      profile.workspace_id as string,
+    await db.from("profiles").insert({
+      id: newId,
+      workspace_id: profile.workspace_id as string,
       email,
       first_name,
       last_name,
-      role || "user",
-      title || null,
-      manager_id || null
-    );
+      role: role || "user",
+      title: title || null,
+      manager_id: manager_id || null,
+    });
 
-    db.prepare(
-      "INSERT INTO notification_preferences (id, profile_id) VALUES (?, ?)"
-    ).run(uid(), newId);
+    await db.from("notification_preferences").insert({
+      id: uid(),
+      profile_id: newId,
+    });
 
-    // ── Automated Onboarding: auto-enroll in all mandatory courses ──
-    const mandatoryCourses = db.prepare(
-      "SELECT id FROM courses WHERE workspace_id = ? AND is_mandatory = 1"
-    ).all(profile.workspace_id as string) as { id: string }[];
+    // Auto-enroll in all mandatory courses
+    const { data: mandatoryCourses } = await db
+      .from("courses")
+      .select("id")
+      .eq("workspace_id", profile.workspace_id as string)
+      .eq("is_mandatory", true);
 
-    for (const course of mandatoryCourses) {
-      const enrollId = uid();
-      db.prepare(
-        `INSERT OR IGNORE INTO course_enrollments (id, profile_id, course_id, completed_lessons)
-         VALUES (?, ?, ?, '[]')`
-      ).run(enrollId, newId, course.id);
+    if (mandatoryCourses && mandatoryCourses.length > 0) {
+      const enrollments = mandatoryCourses.map((course) => ({
+        id: uid(),
+        profile_id: newId,
+        course_id: course.id,
+        completed_lessons: [],
+      }));
+      await db.from("course_enrollments").upsert(enrollments, { onConflict: "profile_id,course_id" });
     }
 
-    const created = db.prepare("SELECT * FROM profiles WHERE id = ?").get(newId) as Record<string, unknown>;
+    const { data: created } = await db
+      .from("profiles")
+      .select("*")
+      .eq("id", newId)
+      .single();
+
     return NextResponse.json({
       ...created,
-      onboarding_completed: !!(created.onboarding_completed as number),
-      setup_completed: !!(created.setup_completed as number),
-      auto_enrolled_courses: mandatoryCourses.length,
+      auto_enrolled_courses: mandatoryCourses?.length ?? 0,
     });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Internal error";
@@ -148,9 +144,11 @@ export async function PATCH(request: NextRequest) {
     }
 
     const db = getDb();
-    const target = db
-      .prepare("SELECT * FROM profiles WHERE id = ?")
-      .get(id) as Record<string, unknown> | undefined;
+    const { data: target } = await db
+      .from("profiles")
+      .select("*")
+      .eq("id", id)
+      .maybeSingle();
 
     if (!target) {
       return NextResponse.json(
@@ -179,42 +177,29 @@ export async function PATCH(request: NextRequest) {
       "avatar_url",
       "email",
     ];
-    const sets: string[] = [];
-    const values: unknown[] = [];
+    const updateFields: Record<string, unknown> = {};
 
     for (const key of allowed) {
       if (key in fields) {
-        sets.push(`${key} = ?`);
-        // Convert booleans to integers for SQLite
-        if (key === "onboarding_completed" || key === "setup_completed") {
-          values.push(fields[key] ? 1 : 0);
-        } else {
-          values.push(fields[key]);
-        }
+        updateFields[key] = fields[key];
       }
     }
 
-    if (sets.length === 0) {
+    if (Object.keys(updateFields).length === 0) {
       return NextResponse.json(
         { error: "No valid fields to update" },
         { status: 400 }
       );
     }
 
-    values.push(id);
-    db.prepare(`UPDATE profiles SET ${sets.join(", ")} WHERE id = ?`).run(
-      ...values
-    );
+    const { data: updated } = await db
+      .from("profiles")
+      .update(updateFields)
+      .eq("id", id)
+      .select()
+      .single();
 
-    const updated = db
-      .prepare("SELECT * FROM profiles WHERE id = ?")
-      .get(id) as Record<string, unknown>;
-
-    return NextResponse.json({
-      ...updated,
-      onboarding_completed: !!(updated.onboarding_completed as number),
-      setup_completed: !!(updated.setup_completed as number),
-    });
+    return NextResponse.json(updated);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Internal error";
     return NextResponse.json({ error: message }, { status: 500 });

@@ -11,44 +11,11 @@ export async function GET() {
     }
 
     const db = getDb();
-    const rows = db
-      .prepare(
-        `SELECT t.*,
-                p.id as a_id, p.first_name as a_first_name, p.last_name as a_last_name,
-                p.email as a_email, p.title as a_title, p.role as a_role, p.avatar_url as a_avatar_url
-         FROM tasks t
-         LEFT JOIN profiles p ON p.id = t.assignee_id
-         WHERE t.workspace_id = ?
-         ORDER BY t.updated_at DESC`
-      )
-      .all(profile.workspace_id as string) as Record<string, unknown>[];
-
-    const tasks = rows.map((row) => {
-      const {
-        a_id,
-        a_first_name,
-        a_last_name,
-        a_email,
-        a_title,
-        a_role,
-        a_avatar_url,
-        ...taskFields
-      } = row;
-      return {
-        ...taskFields,
-        assignee: a_id
-          ? {
-              id: a_id,
-              first_name: a_first_name,
-              last_name: a_last_name,
-              email: a_email,
-              title: a_title,
-              role: a_role,
-              avatar_url: a_avatar_url,
-            }
-          : null,
-      };
-    });
+    const { data: tasks } = await db
+      .from("tasks")
+      .select("*, assignee:profiles!assignee_id(id, first_name, last_name, email, title, role, avatar_url)")
+      .eq("workspace_id", profile.workspace_id as string)
+      .order("updated_at", { ascending: false });
 
     return NextResponse.json(tasks);
   } catch (err: unknown) {
@@ -82,43 +49,32 @@ export async function POST(request: NextRequest) {
 
     const db = getDb();
     if (!hasPrivilegedWorkspaceRole(profile.role)) {
-      const prefs = getWorkspacePreferences(profile.workspace_id as string);
+      const prefs = await getWorkspacePreferences(profile.workspace_id as string);
       if (!prefs.members_can_create_tasks) {
         return NextResponse.json({ error: "Permission denied" }, { status: 403 });
       }
     }
     const id = uid();
-    db.prepare(
-      `INSERT INTO tasks (id, workspace_id, title, description, status, priority, creator_id, assignee_id, due_date, sop_reference_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(
+    await db.from("tasks").insert({
       id,
-      profile.workspace_id as string,
+      workspace_id: profile.workspace_id as string,
       title,
-      description || null,
-      status || "TODO",
-      priority || "MEDIUM",
-      profile.id as string,
-      assignee_id || null,
-      due_date || null,
-      sop_reference_id || null
-    );
+      description: description || null,
+      status: status || "TODO",
+      priority: priority || "MEDIUM",
+      creator_id: profile.id as string,
+      assignee_id: assignee_id || null,
+      due_date: due_date || null,
+      sop_reference_id: sop_reference_id || null,
+    });
 
     // Return with assignee joined (same shape as GET)
-    const row = db.prepare(
-      `SELECT t.*,
-              p.id as a_id, p.first_name as a_first_name, p.last_name as a_last_name,
-              p.email as a_email, p.title as a_title, p.role as a_role, p.avatar_url as a_avatar_url
-       FROM tasks t
-       LEFT JOIN profiles p ON p.id = t.assignee_id
-       WHERE t.id = ?`
-    ).get(id) as Record<string, unknown>;
+    const { data: task } = await db
+      .from("tasks")
+      .select("*, assignee:profiles!assignee_id(id, first_name, last_name, email, title, role, avatar_url)")
+      .eq("id", id)
+      .single();
 
-    const { a_id, a_first_name, a_last_name, a_email, a_title, a_role, a_avatar_url, ...taskFields } = row;
-    const task = {
-      ...taskFields,
-      assignee: a_id ? { id: a_id, first_name: a_first_name, last_name: a_last_name, email: a_email, title: a_title, role: a_role, avatar_url: a_avatar_url } : null,
-    };
     return NextResponse.json(task);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Internal error";
@@ -140,9 +96,12 @@ export async function PATCH(request: NextRequest) {
     }
 
     const db = getDb();
-    const existing = db
-      .prepare("SELECT * FROM tasks WHERE id = ? AND workspace_id = ?")
-      .get(id, profile.workspace_id as string);
+    const { data: existing } = await db
+      .from("tasks")
+      .select("*")
+      .eq("id", id)
+      .eq("workspace_id", profile.workspace_id as string)
+      .maybeSingle();
     if (!existing) {
       return NextResponse.json({ error: "Task not found" }, { status: 404 });
     }
@@ -157,22 +116,21 @@ export async function PATCH(request: NextRequest) {
       "sop_reference_id",
       "integration_source",
     ];
-    const sets: string[] = ["updated_at = datetime('now')"];
-    const values: unknown[] = [];
+    const updateFields: Record<string, unknown> = {};
 
     for (const key of allowed) {
       if (key in fields) {
-        sets.push(`${key} = ?`);
-        values.push(fields[key]);
+        updateFields[key] = fields[key];
       }
     }
 
-    values.push(id);
-    db.prepare(`UPDATE tasks SET ${sets.join(", ")} WHERE id = ?`).run(
-      ...values
-    );
+    const { data: updated } = await db
+      .from("tasks")
+      .update(updateFields)
+      .eq("id", id)
+      .select()
+      .single();
 
-    const updated = db.prepare("SELECT * FROM tasks WHERE id = ?").get(id);
     return NextResponse.json(updated);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Internal error";
@@ -193,14 +151,17 @@ export async function DELETE(request: NextRequest) {
     }
 
     const db = getDb();
-    const existing = db
-      .prepare("SELECT * FROM tasks WHERE id = ? AND workspace_id = ?")
-      .get(id, profile.workspace_id as string);
+    const { data: existing } = await db
+      .from("tasks")
+      .select("*")
+      .eq("id", id)
+      .eq("workspace_id", profile.workspace_id as string)
+      .maybeSingle();
     if (!existing) {
       return NextResponse.json({ error: "Task not found" }, { status: 404 });
     }
 
-    db.prepare("DELETE FROM tasks WHERE id = ?").run(id);
+    await db.from("tasks").delete().eq("id", id);
     return NextResponse.json({ ok: true });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Internal error";

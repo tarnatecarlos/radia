@@ -7,11 +7,12 @@ export async function POST() {
     const db = getDb();
 
     // Only seed if no users exist — this is the safety gate
-    const userCount = db
-      .prepare("SELECT COUNT(*) as count FROM users")
-      .get() as { count: number };
+    const { count, error: countErr } = await db
+      .from("users")
+      .select("*", { count: "exact", head: true });
 
-    if (userCount.count > 0) {
+    if (countErr) throw countErr;
+    if ((count ?? 0) > 0) {
       return NextResponse.json(
         { error: "Database already has users. Seed aborted." },
         { status: 403 }
@@ -21,40 +22,48 @@ export async function POST() {
     // --- Admin user ---
     const adminUserId = uid();
     const adminHash = await hashPassword("password123");
-    db.prepare(
-      "INSERT INTO users (id, email, password_hash) VALUES (?, ?, ?)"
-    ).run(adminUserId, "admin@radiacorp.com", adminHash);
+    await db.from("users").insert({
+      id: adminUserId,
+      email: "admin@radiacorp.com",
+      password_hash: adminHash,
+    });
 
     // --- Workspace ---
     const workspaceId = uid();
-    db.prepare(
-      "INSERT INTO workspaces (id, name, subdomain) VALUES (?, ?, ?)"
-    ).run(workspaceId, "Radia HQ", "radia-hq");
+    await db.from("workspaces").insert({
+      id: workspaceId,
+      name: "Radia HQ",
+      subdomain: "radia-hq",
+    });
 
     // --- Admin profile ---
     const adminProfileId = uid();
-    db.prepare(
-      `INSERT INTO profiles (id, user_id, workspace_id, email, first_name, last_name, role, title, onboarding_completed, setup_completed)
-       VALUES (?, ?, ?, ?, ?, ?, 'creator', ?, 1, 1)`
-    ).run(
-      adminProfileId,
-      adminUserId,
-      workspaceId,
-      "admin@radiacorp.com",
-      "Claude",
-      "Admin",
-      "CTO & AI Operations Lead"
-    );
+    await db.from("profiles").insert({
+      id: adminProfileId,
+      user_id: adminUserId,
+      workspace_id: workspaceId,
+      email: "admin@radiacorp.com",
+      first_name: "Claude",
+      last_name: "Admin",
+      role: "creator",
+      title: "CTO & AI Operations Lead",
+      onboarding_completed: true,
+      setup_completed: true,
+    });
 
     // --- Server admin ---
-    db.prepare(
-      "INSERT INTO server_admins (id, profile_id, server_role, granted_by) VALUES (?, ?, 'super_admin', ?)"
-    ).run(uid(), adminProfileId, adminProfileId);
+    await db.from("server_admins").insert({
+      id: uid(),
+      profile_id: adminProfileId,
+      server_role: "super_admin",
+      granted_by: adminProfileId,
+    });
 
     // --- Notification preferences for admin ---
-    db.prepare(
-      "INSERT INTO notification_preferences (id, profile_id) VALUES (?, ?)"
-    ).run(uid(), adminProfileId);
+    await db.from("notification_preferences").insert({
+      id: uid(),
+      profile_id: adminProfileId,
+    });
 
     // --- Sample employees ---
     const employees = [
@@ -96,29 +105,32 @@ export async function POST() {
     ];
 
     const employeeIds: string[] = [];
-    const insertProfile = db.prepare(
-      `INSERT INTO profiles (id, workspace_id, email, first_name, last_name, role, title, manager_id, onboarding_completed, setup_completed)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0)`
-    );
-    const insertNotifPref = db.prepare(
-      "INSERT INTO notification_preferences (id, profile_id) VALUES (?, ?)"
-    );
+    const profileInserts = [];
+    const notifInserts = [];
 
     for (const emp of employees) {
       const empId = uid();
       employeeIds.push(empId);
-      insertProfile.run(
-        empId,
-        workspaceId,
-        emp.email,
-        emp.first_name,
-        emp.last_name,
-        emp.role,
-        emp.title,
-        adminProfileId
-      );
-      insertNotifPref.run(uid(), empId);
+      profileInserts.push({
+        id: empId,
+        workspace_id: workspaceId,
+        email: emp.email,
+        first_name: emp.first_name,
+        last_name: emp.last_name,
+        role: emp.role,
+        title: emp.title,
+        manager_id: adminProfileId,
+        onboarding_completed: false,
+        setup_completed: false,
+      });
+      notifInserts.push({
+        id: uid(),
+        profile_id: empId,
+      });
     }
+
+    await db.from("profiles").insert(profileInserts);
+    await db.from("notification_preferences").insert(notifInserts);
 
     // --- Integrations ---
     const platforms = [
@@ -129,27 +141,27 @@ export async function POST() {
       "teams",
       "messenger",
     ];
-    const insertIntegration = db.prepare(
-      "INSERT INTO integrations (id, workspace_id, platform_name, is_active) VALUES (?, ?, ?, 0)"
-    );
-    for (const platform of platforms) {
-      insertIntegration.run(uid(), workspaceId, platform);
-    }
+    const integrationInserts = platforms.map((platform) => ({
+      id: uid(),
+      workspace_id: workspaceId,
+      platform_name: platform,
+      is_active: false,
+    }));
+    await db.from("integrations").insert(integrationInserts);
 
     // --- Workspace preferences ---
-    db.prepare("INSERT INTO workspace_preferences (id, workspace_id) VALUES (?, ?)").run(uid(), workspaceId);
+    await db.from("workspace_preferences").insert({
+      id: uid(),
+      workspace_id: workspaceId,
+    });
 
     // --- SOPs ---
-    const insertSop = db.prepare(
-      `INSERT INTO sops (id, workspace_id, title, content, category, last_updated_by)
-       VALUES (?, ?, ?, ?, ?, ?)`
-    );
-
-    insertSop.run(
-      uid(),
-      workspaceId,
-      "Code Review Standards",
-      `# Code Review Standards
+    const sopInserts = [
+      {
+        id: uid(),
+        workspace_id: workspaceId,
+        title: "Code Review Standards",
+        content: `# Code Review Standards
 
 ## Purpose
 Establish consistent code review practices across all engineering teams to maintain code quality, share knowledge, and catch issues early.
@@ -171,15 +183,14 @@ Establish consistent code review practices across all engineering teams to maint
 - **Standard Review**: For most changes, requires 1 reviewer
 - **Critical Review**: For security/infrastructure changes, requires 2 reviewers
 - **Quick Review**: For typos/docs, can be self-merged after CI passes`,
-      "Engineering",
-      adminProfileId
-    );
-
-    insertSop.run(
-      uid(),
-      workspaceId,
-      "New Employee Onboarding Checklist",
-      `# New Employee Onboarding Checklist
+        category: "Engineering",
+        last_updated_by: adminProfileId,
+      },
+      {
+        id: uid(),
+        workspace_id: workspaceId,
+        title: "New Employee Onboarding Checklist",
+        content: `# New Employee Onboarding Checklist
 
 ## First Day
 - [ ] Complete HR paperwork and benefits enrollment
@@ -201,15 +212,14 @@ Establish consistent code review practices across all engineering teams to maint
 - [ ] Understand team workflows and processes
 - [ ] Set 30-60-90 day goals with manager
 - [ ] Provide feedback on onboarding experience`,
-      "HR",
-      adminProfileId
-    );
-
-    insertSop.run(
-      uid(),
-      workspaceId,
-      "Remote Work Policy",
-      `# Remote Work Policy
+        category: "HR",
+        last_updated_by: adminProfileId,
+      },
+      {
+        id: uid(),
+        workspace_id: workspaceId,
+        title: "Remote Work Policy",
+        content: `# Remote Work Policy
 
 ## Eligibility
 All full-time employees are eligible for remote work after completing their onboarding period. Hybrid and fully remote arrangements are available based on role requirements.
@@ -231,9 +241,11 @@ All full-time employees are eligible for remote work after completing their onbo
 - Flexible scheduling around core hours
 - Time tracking required for project billing
 - Overtime must be pre-approved by manager`,
-      "General",
-      adminProfileId
-    );
+        category: "General",
+        last_updated_by: adminProfileId,
+      },
+    ];
+    await db.from("sops").insert(sopInserts);
 
     // --- Tasks ---
     const allProfileIds = [adminProfileId, ...employeeIds];
@@ -304,93 +316,91 @@ All full-time employees are eligible for remote work after completing their onbo
       },
     ];
 
-    const insertTask = db.prepare(
-      `INSERT INTO tasks (id, workspace_id, title, description, status, priority, creator_id, assignee_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-    );
-
-    for (const task of taskData) {
-      insertTask.run(
-        uid(),
-        workspaceId,
-        task.title,
-        task.description,
-        task.status,
-        task.priority,
-        adminProfileId,
-        allProfileIds[task.assignee_idx + 1] // +1 because allProfileIds[0] is admin
-      );
-    }
+    const taskInserts = taskData.map((task) => ({
+      id: uid(),
+      workspace_id: workspaceId,
+      title: task.title,
+      description: task.description,
+      status: task.status,
+      priority: task.priority,
+      creator_id: adminProfileId,
+      assignee_id: allProfileIds[task.assignee_idx + 1], // +1 because allProfileIds[0] is admin
+    }));
+    await db.from("tasks").insert(taskInserts);
 
     // --- Courses ---
     const course1Id = uid();
-    db.prepare(
-      `INSERT INTO courses (id, workspace_id, title, description, is_mandatory)
-       VALUES (?, ?, ?, ?, 1)`
-    ).run(
-      course1Id,
-      workspaceId,
-      "Welcome to Radia",
-      "Get started with Radia - learn about our company, team structure, and the tools we use."
-    );
+    await db.from("courses").insert({
+      id: course1Id,
+      workspace_id: workspaceId,
+      title: "Welcome to Radia",
+      description:
+        "Get started with Radia - learn about our company, team structure, and the tools we use.",
+      is_mandatory: true,
+    });
 
-    const insertLesson = db.prepare(
-      `INSERT INTO lessons (id, course_id, title, content, sort_order, estimated_minutes)
-       VALUES (?, ?, ?, ?, ?, ?)`
-    );
-
-    insertLesson.run(
-      uid(),
-      course1Id,
-      "Company Overview",
-      "Learn about Radia's mission, values, and history. Understand our position in the market and our goals for the future.",
-      1,
-      5
-    );
-    insertLesson.run(
-      uid(),
-      course1Id,
-      "Team Structure",
-      "Understand how our teams are organized, key roles and responsibilities, and how cross-functional collaboration works.",
-      2,
-      3
-    );
-    insertLesson.run(
-      uid(),
-      course1Id,
-      "Tools & Access",
-      "Set up your development environment, get access to necessary tools, and learn our workflow processes.",
-      3,
-      4
-    );
+    const lesson1Inserts = [
+      {
+        id: uid(),
+        course_id: course1Id,
+        title: "Company Overview",
+        content:
+          "Learn about Radia's mission, values, and history. Understand our position in the market and our goals for the future.",
+        sort_order: 1,
+        estimated_minutes: 5,
+      },
+      {
+        id: uid(),
+        course_id: course1Id,
+        title: "Team Structure",
+        content:
+          "Understand how our teams are organized, key roles and responsibilities, and how cross-functional collaboration works.",
+        sort_order: 2,
+        estimated_minutes: 3,
+      },
+      {
+        id: uid(),
+        course_id: course1Id,
+        title: "Tools & Access",
+        content:
+          "Set up your development environment, get access to necessary tools, and learn our workflow processes.",
+        sort_order: 3,
+        estimated_minutes: 4,
+      },
+    ];
+    await db.from("lessons").insert(lesson1Inserts);
 
     const course2Id = uid();
-    db.prepare(
-      `INSERT INTO courses (id, workspace_id, title, description, is_mandatory)
-       VALUES (?, ?, ?, ?, 1)`
-    ).run(
-      course2Id,
-      workspaceId,
-      "Security & Compliance",
-      "Essential security practices and compliance requirements every team member must know."
-    );
+    await db.from("courses").insert({
+      id: course2Id,
+      workspace_id: workspaceId,
+      title: "Security & Compliance",
+      description:
+        "Essential security practices and compliance requirements every team member must know.",
+      is_mandatory: true,
+    });
 
-    insertLesson.run(
-      uid(),
-      course2Id,
-      "Data Security",
-      "Learn about data classification, encryption practices, secure communication, and how to handle sensitive information.",
-      1,
-      6
-    );
-    insertLesson.run(
-      uid(),
-      course2Id,
-      "Compliance Basics",
-      "Understand regulatory requirements, company policies, audit procedures, and your responsibilities for maintaining compliance.",
-      2,
-      5
-    );
+    const lesson2Inserts = [
+      {
+        id: uid(),
+        course_id: course2Id,
+        title: "Data Security",
+        content:
+          "Learn about data classification, encryption practices, secure communication, and how to handle sensitive information.",
+        sort_order: 1,
+        estimated_minutes: 6,
+      },
+      {
+        id: uid(),
+        course_id: course2Id,
+        title: "Compliance Basics",
+        content:
+          "Understand regulatory requirements, company policies, audit procedures, and your responsibilities for maintaining compliance.",
+        sort_order: 2,
+        estimated_minutes: 5,
+      },
+    ];
+    await db.from("lessons").insert(lesson2Inserts);
 
     return NextResponse.json({ ok: true, message: "Seeded successfully" });
   } catch (err: unknown) {

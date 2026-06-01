@@ -20,15 +20,29 @@ export async function GET(request: NextRequest) {
 
     const db = getDb();
     const emailPattern = `%@${domain}`;
-    const workspaces = db
-      .prepare(
-        `SELECT DISTINCT w.* FROM workspaces w
-         JOIN profiles p ON p.workspace_id = w.id
-         WHERE p.email LIKE ?
-         LIMIT 25`
-      )
-      .all(emailPattern);
 
+    // Find profiles matching the email pattern, then get distinct workspaces
+    const { data: profiles, error: profilesErr } = await db
+      .from("profiles")
+      .select("workspace_id")
+      .ilike("email", emailPattern)
+      .limit(25);
+
+    if (profilesErr) throw profilesErr;
+
+    const workspaceIds = [...new Set((profiles || []).map((p: { workspace_id: string }) => p.workspace_id))];
+
+    if (workspaceIds.length === 0) {
+      return NextResponse.json([]);
+    }
+
+    const { data: workspaces, error: wsErr } = await db
+      .from("workspaces")
+      .select("*")
+      .in("id", workspaceIds)
+      .limit(25);
+
+    if (wsErr) throw wsErr;
     return NextResponse.json(workspaces);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Internal error";

@@ -19,11 +19,13 @@ export async function POST(request: NextRequest) {
     }
 
     const db = getDb();
-    const user = db
-      .prepare("SELECT id, password_hash FROM users WHERE email = ?")
-      .get(email) as { id: string; password_hash: string } | undefined;
+    const { data: user, error } = await db
+      .from("users")
+      .select("id, password_hash")
+      .eq("email", email)
+      .maybeSingle();
 
-    if (!user) {
+    if (error || !user) {
       return NextResponse.json(
         { error: "Invalid credentials" },
         { status: 401 }
@@ -38,7 +40,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const sessionId = createSession(user.id);
+    const sessionId = await createSession(user.id);
     const cookieStore = await cookies();
     cookieStore.set(SESSION_COOKIE, sessionId, sessionCookieOptions());
 

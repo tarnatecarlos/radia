@@ -13,41 +13,72 @@ export async function GET(request: NextRequest) {
     const cycleId = url.searchParams.get("cycle_id");
     const type = url.searchParams.get("type"); // "cycles" | "reviews"
 
-    const cyclesQuery = `SELECT rc.*,
-       (SELECT COUNT(*) FROM reviews WHERE review_cycle_id = rc.id) as review_count,
-       (SELECT COUNT(*) FROM reviews WHERE review_cycle_id = rc.id AND status = 'submitted') as completed_count
-     FROM review_cycles rc
-     WHERE rc.workspace_id = ?
-     ORDER BY rc.start_date DESC`;
-
     if (type === "cycles") {
-      return NextResponse.json(db.prepare(cyclesQuery).all(profile.workspace_id as string));
+      const { data: cycles, error } = await db
+        .from("review_cycles")
+        .select("*, reviews(id, status)")
+        .eq("workspace_id", profile.workspace_id as string)
+        .order("start_date", { ascending: false });
+
+      if (error) throw error;
+
+      const result = (cycles || []).map((rc: Record<string, unknown>) => {
+        const reviews = (rc.reviews || []) as { id: string; status: string }[];
+        return {
+          ...rc,
+          review_count: reviews.length,
+          completed_count: reviews.filter((r) => r.status === "submitted").length,
+          reviews: undefined,
+        };
+      });
+      return NextResponse.json(result);
     }
 
-    // Get individual reviews
-    let query = `SELECT r.*,
-                   re.first_name as reviewee_first, re.last_name as reviewee_last, re.title as reviewee_title, re.avatar_url as reviewee_avatar,
-                   rr.first_name as reviewer_first, rr.last_name as reviewer_last, rr.title as reviewer_title, rr.avatar_url as reviewer_avatar
-                 FROM reviews r
-                 JOIN profiles re ON re.id = r.reviewee_id
-                 JOIN profiles rr ON rr.id = r.reviewer_id
-                 JOIN review_cycles rc ON rc.id = r.review_cycle_id
-                 WHERE rc.workspace_id = ?`;
-    const params: unknown[] = [profile.workspace_id as string];
+    // Get individual reviews with profile joins via nested select
+    let query = db
+      .from("reviews")
+      .select(
+        `*,
+         reviewee:profiles!reviews_reviewee_id_fkey(first_name, last_name, title, avatar_url),
+         reviewer:profiles!reviews_reviewer_id_fkey(first_name, last_name, title, avatar_url),
+         review_cycle:review_cycles!inner(workspace_id)`
+      )
+      .eq("review_cycle.workspace_id", profile.workspace_id as string);
 
-    if (cycleId) { query += " AND r.review_cycle_id = ?"; params.push(cycleId); }
-    query += " ORDER BY r.created_at DESC";
+    if (cycleId) {
+      query = query.eq("review_cycle_id", cycleId);
+    }
+    query = query.order("created_at", { ascending: false });
 
-    const reviews = db.prepare(query).all(...params) as Record<string, unknown>[];
-    const enriched = reviews.map(r => ({
+    const { data: reviews, error: revErr } = await query;
+    if (revErr) throw revErr;
+
+    // Clean up nested review_cycle from response
+    const enriched = (reviews || []).map((r: Record<string, unknown>) => ({
       ...r,
-      reviewee: { first_name: r.reviewee_first, last_name: r.reviewee_last, title: r.reviewee_title, avatar_url: r.reviewee_avatar },
-      reviewer: { first_name: r.reviewer_first, last_name: r.reviewer_last, title: r.reviewer_title, avatar_url: r.reviewer_avatar },
+      review_cycle: undefined,
     }));
 
     if (!type) {
-      const cycles = db.prepare(cyclesQuery).all(profile.workspace_id as string);
-      return NextResponse.json({ cycles, reviews: enriched });
+      // Also return cycles
+      const { data: cycles, error: cycErr } = await db
+        .from("review_cycles")
+        .select("*, reviews(id, status)")
+        .eq("workspace_id", profile.workspace_id as string)
+        .order("start_date", { ascending: false });
+
+      if (cycErr) throw cycErr;
+
+      const cycleResult = (cycles || []).map((rc: Record<string, unknown>) => {
+        const revs = (rc.reviews || []) as { id: string; status: string }[];
+        return {
+          ...rc,
+          review_count: revs.length,
+          completed_count: revs.filter((r) => r.status === "submitted").length,
+          reviews: undefined,
+        };
+      });
+      return NextResponse.json({ cycles: cycleResult, reviews: enriched });
     }
 
     return NextResponse.json(enriched);
@@ -76,11 +107,20 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: "name, quarter, start_date, end_date required" }, { status: 400 });
       }
       const id = uid();
-      db.prepare(
-        `INSERT INTO review_cycles (id, workspace_id, name, quarter, start_date, end_date)
-         VALUES (?, ?, ?, ?, ?, ?)`
-      ).run(id, profile.workspace_id as string, name, quarter, start_date, end_date);
-      const created = db.prepare("SELECT * FROM review_cycles WHERE id = ?").get(id);
+      const { data: created, error } = await db
+        .from("review_cycles")
+        .insert({
+          id,
+          workspace_id: profile.workspace_id as string,
+          name,
+          quarter,
+          start_date,
+          end_date,
+        })
+        .select()
+        .single();
+
+      if (error) throw error;
       return NextResponse.json(created);
     }
 
@@ -90,11 +130,18 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "review_cycle_id and reviewee_id required" }, { status: 400 });
     }
     const id = uid();
-    db.prepare(
-      `INSERT INTO reviews (id, review_cycle_id, reviewee_id, reviewer_id)
-       VALUES (?, ?, ?, ?)`
-    ).run(id, review_cycle_id, reviewee_id, reviewer_id || profile.id);
-    const created = db.prepare("SELECT * FROM reviews WHERE id = ?").get(id);
+    const { data: created, error } = await db
+      .from("reviews")
+      .insert({
+        id,
+        review_cycle_id,
+        reviewee_id,
+        reviewer_id: reviewer_id || profile.id,
+      })
+      .select()
+      .single();
+
+    if (error) throw error;
     return NextResponse.json(created);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Internal error";
@@ -115,9 +162,16 @@ export async function PATCH(request: NextRequest) {
     if (body.action === "update_cycle") {
       const { id, status } = body;
       if (!id || !status) return NextResponse.json({ error: "id and status required" }, { status: 400 });
-      db.prepare("UPDATE review_cycles SET status = ? WHERE id = ? AND workspace_id = ?")
-        .run(status, id, profile.workspace_id as string);
-      const updated = db.prepare("SELECT * FROM review_cycles WHERE id = ?").get(id);
+
+      const { data: updated, error } = await db
+        .from("review_cycles")
+        .update({ status })
+        .eq("id", id)
+        .eq("workspace_id", profile.workspace_id as string)
+        .select()
+        .single();
+
+      if (error) throw error;
       return NextResponse.json(updated);
     }
 
@@ -125,65 +179,86 @@ export async function PATCH(request: NextRequest) {
     const { id, rating, summary, strengths, improvements, skill_gaps } = body;
     if (!id) return NextResponse.json({ error: "id is required" }, { status: 400 });
 
-    const sets: string[] = [];
-    const values: unknown[] = [];
+    const updatePayload: Record<string, unknown> = {};
 
-    if (rating !== undefined) { sets.push("rating = ?"); values.push(rating); }
-    if (summary !== undefined) { sets.push("summary = ?"); values.push(summary); }
-    if (strengths !== undefined) { sets.push("strengths = ?"); values.push(strengths); }
-    if (improvements !== undefined) { sets.push("improvements = ?"); values.push(improvements); }
+    if (rating !== undefined) updatePayload.rating = rating;
+    if (summary !== undefined) updatePayload.summary = summary;
+    if (strengths !== undefined) updatePayload.strengths = strengths;
+    if (improvements !== undefined) updatePayload.improvements = improvements;
 
     // Mark as submitted if rating provided
     if (rating !== undefined) {
-      sets.push("status = 'submitted'");
-      sets.push("submitted_at = datetime('now')");
-    } else if (sets.length > 0) {
-      sets.push("status = 'in_progress'");
+      updatePayload.status = "submitted";
+      updatePayload.submitted_at = new Date().toISOString();
+    } else if (Object.keys(updatePayload).length > 0) {
+      updatePayload.status = "in_progress";
     }
 
-    if (sets.length > 0) {
-      values.push(id);
-      db.prepare(`UPDATE reviews SET ${sets.join(", ")} WHERE id = ?`).run(...values);
+    if (Object.keys(updatePayload).length > 0) {
+      const { error: upErr } = await db
+        .from("reviews")
+        .update(updatePayload)
+        .eq("id", id);
+
+      if (upErr) throw upErr;
     }
 
     // Process skill gaps → auto-recommend LMS courses (cross-module bridge)
     if (skill_gaps && Array.isArray(skill_gaps) && skill_gaps.length > 0) {
-      const review = db.prepare("SELECT * FROM reviews WHERE id = ?").get(id) as Record<string, unknown>;
+      const { data: review } = await db
+        .from("reviews")
+        .select("*")
+        .eq("id", id)
+        .single();
 
-      db.transaction(() => {
-        for (const gap of skill_gaps) {
-          const gapId = uid();
+      for (const gap of skill_gaps) {
+        const gapId = uid();
 
-          // Find a course that teaches this skill
-          const courseSkill = db.prepare(
-            `SELECT cs.course_id FROM course_skills cs
-             JOIN courses c ON c.id = cs.course_id
-             WHERE cs.skill_id = ? AND c.workspace_id = ?
-             LIMIT 1`
-          ).get(gap.skill_id, profile.workspace_id as string) as { course_id: string } | undefined;
+        // Find a course that teaches this skill
+        const { data: courseSkill } = await db
+          .from("course_skills")
+          .select("course_id, courses!inner(workspace_id)")
+          .eq("skill_id", gap.skill_id)
+          .eq("courses.workspace_id", profile.workspace_id as string)
+          .limit(1)
+          .maybeSingle();
 
-          db.prepare(
-            `INSERT INTO review_skill_gaps (id, review_id, skill_id, recommended_course_id, notes)
-             VALUES (?, ?, ?, ?, ?)`
-          ).run(gapId, id, gap.skill_id, courseSkill?.course_id ?? null, gap.notes || null);
+        await db.from("review_skill_gaps").insert({
+          id: gapId,
+          review_id: id,
+          skill_id: gap.skill_id,
+          recommended_course_id: courseSkill?.course_id ?? null,
+          notes: gap.notes || null,
+        });
 
-          // Auto-enroll reviewee in recommended course if one exists
-          if (courseSkill && review) {
-            const existing = db.prepare(
-              "SELECT id FROM course_enrollments WHERE profile_id = ? AND course_id = ?"
-            ).get(review.reviewee_id as string, courseSkill.course_id);
-            if (!existing) {
-              db.prepare(
-                `INSERT INTO course_enrollments (id, profile_id, course_id, completed_lessons)
-                 VALUES (?, ?, ?, '[]')`
-              ).run(uid(), review.reviewee_id as string, courseSkill.course_id);
-            }
+        // Auto-enroll reviewee in recommended course if one exists
+        if (courseSkill && review) {
+          const { data: existingEnrollment } = await db
+            .from("course_enrollments")
+            .select("id")
+            .eq("profile_id", review.reviewee_id as string)
+            .eq("course_id", courseSkill.course_id)
+            .maybeSingle();
+
+          if (!existingEnrollment) {
+            await db.from("course_enrollments").insert({
+              id: uid(),
+              profile_id: review.reviewee_id as string,
+              course_id: courseSkill.course_id,
+              completed_lessons: [],
+            });
           }
         }
-      })();
+      }
     }
 
-    const updated = db.prepare("SELECT * FROM reviews WHERE id = ?").get(id);
+    const { data: updated, error: fetchErr } = await db
+      .from("reviews")
+      .select("*")
+      .eq("id", id)
+      .single();
+
+    if (fetchErr) throw fetchErr;
     return NextResponse.json(updated);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Internal error";

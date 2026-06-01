@@ -13,21 +13,26 @@ export async function GET(request: NextRequest) {
     const profileId = url.searchParams.get("profile_id");
     const cycleId = url.searchParams.get("cycle_id");
 
-    let query = `SELECT o.*, p.first_name, p.last_name, p.title as job_title, p.avatar_url
-                 FROM objectives o
-                 JOIN profiles p ON p.id = o.profile_id
-                 WHERE o.workspace_id = ?`;
-    const params: unknown[] = [profile.workspace_id as string];
+    let query = db
+      .from("objectives")
+      .select("*, profiles!inner(first_name, last_name, title, avatar_url)")
+      .eq("workspace_id", profile.workspace_id as string);
 
-    if (profileId) { query += " AND o.profile_id = ?"; params.push(profileId); }
-    if (cycleId) { query += " AND o.review_cycle_id = ?"; params.push(cycleId); }
-    query += " ORDER BY o.created_at DESC";
+    if (profileId) query = query.eq("profile_id", profileId);
+    if (cycleId) query = query.eq("review_cycle_id", cycleId);
+    query = query.order("created_at", { ascending: false });
 
-    const rows = db.prepare(query).all(...params) as Record<string, unknown>[];
-    const result = rows.map(r => ({
-      ...r,
-      owner: { first_name: r.first_name, last_name: r.last_name, title: r.job_title, avatar_url: r.avatar_url },
-    }));
+    const { data: rows, error } = await query;
+    if (error) throw error;
+
+    const result = (rows || []).map((r: Record<string, unknown>) => {
+      const p = r.profiles as { first_name: string; last_name: string; title: string; avatar_url: string };
+      return {
+        ...r,
+        owner: { first_name: p.first_name, last_name: p.last_name, title: p.title, avatar_url: p.avatar_url },
+        profiles: undefined,
+      };
+    });
     return NextResponse.json(result);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Internal error";
@@ -46,12 +51,22 @@ export async function POST(request: NextRequest) {
 
     const db = getDb();
     const id = uid();
-    db.prepare(
-      `INSERT INTO objectives (id, workspace_id, profile_id, review_cycle_id, title, description, metric, target_value)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(id, profile.workspace_id as string, profile_id || profile.id, review_cycle_id || null, title, description || null, metric || null, target_value ?? null);
+    const { data: created, error } = await db
+      .from("objectives")
+      .insert({
+        id,
+        workspace_id: profile.workspace_id as string,
+        profile_id: profile_id || profile.id,
+        review_cycle_id: review_cycle_id || null,
+        title,
+        description: description || null,
+        metric: metric || null,
+        target_value: target_value ?? null,
+      })
+      .select()
+      .single();
 
-    const created = db.prepare("SELECT * FROM objectives WHERE id = ?").get(id);
+    if (error) throw error;
     return NextResponse.json(created);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Internal error";
@@ -71,17 +86,23 @@ export async function PATCH(request: NextRequest) {
 
     const db = getDb();
     const allowed = ["title", "description", "metric", "target_value", "current_value", "status", "review_cycle_id"];
-    const sets: string[] = ["updated_at = datetime('now')"];
-    const values: unknown[] = [];
+    const updatePayload: Record<string, unknown> = {
+      updated_at: new Date().toISOString(),
+    };
 
     for (const key of allowed) {
-      if (key in fields) { sets.push(`${key} = ?`); values.push(fields[key]); }
+      if (key in fields) updatePayload[key] = fields[key];
     }
 
-    values.push(id, profile.workspace_id as string);
-    db.prepare(`UPDATE objectives SET ${sets.join(", ")} WHERE id = ? AND workspace_id = ?`).run(...values);
+    const { data: updated, error } = await db
+      .from("objectives")
+      .update(updatePayload)
+      .eq("id", id)
+      .eq("workspace_id", profile.workspace_id as string)
+      .select()
+      .single();
 
-    const updated = db.prepare("SELECT * FROM objectives WHERE id = ?").get(id);
+    if (error) throw error;
     return NextResponse.json(updated);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Internal error";
@@ -99,7 +120,13 @@ export async function DELETE(request: NextRequest) {
     if (!id) return NextResponse.json({ error: "id is required" }, { status: 400 });
 
     const db = getDb();
-    db.prepare("DELETE FROM objectives WHERE id = ? AND workspace_id = ?").run(id, profile.workspace_id as string);
+    const { error } = await db
+      .from("objectives")
+      .delete()
+      .eq("id", id)
+      .eq("workspace_id", profile.workspace_id as string);
+
+    if (error) throw error;
     return NextResponse.json({ ok: true });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Internal error";

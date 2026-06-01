@@ -13,12 +13,12 @@ export async function PATCH(request: NextRequest) {
   try {
     const cookieStore = await cookies();
     const sessionId = cookieStore.get(SESSION_COOKIE)?.value;
-    const session = getSessionUser(sessionId);
+    const session = await getSessionUser(sessionId);
     if (!session) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const profile = getProfileByUserId(session.userId);
+    const profile = await getProfileByUserId(session.userId);
     if (!profile) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
@@ -32,11 +32,13 @@ export async function PATCH(request: NextRequest) {
     }
 
     const db = getDb();
-    const user = db
-      .prepare("SELECT password_hash FROM users WHERE id = ?")
-      .get(session.userId) as { password_hash: string } | undefined;
+    const { data: user, error } = await db
+      .from("users")
+      .select("password_hash")
+      .eq("id", session.userId)
+      .maybeSingle();
 
-    if (!user) {
+    if (error || !user) {
       return NextResponse.json({ error: "User not found" }, { status: 404 });
     }
 
@@ -49,10 +51,11 @@ export async function PATCH(request: NextRequest) {
     }
 
     const newHash = await hashPassword(newPassword);
-    db.prepare("UPDATE users SET password_hash = ? WHERE id = ?").run(
-      newHash,
-      session.userId
-    );
+    const { error: updateErr } = await db
+      .from("users")
+      .update({ password_hash: newHash })
+      .eq("id", session.userId);
+    if (updateErr) throw new Error(`Failed to update password: ${updateErr.message}`);
 
     return NextResponse.json({ ok: true });
   } catch (err: unknown) {

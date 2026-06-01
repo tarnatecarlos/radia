@@ -11,15 +11,10 @@ export async function GET() {
     }
 
     const db = getDb();
-    const rows = db
-      .prepare("SELECT * FROM integrations WHERE workspace_id = ?")
-      .all(profile.workspace_id as string) as Record<string, unknown>[];
-
-    const integrations = rows.map((row) => ({
-      ...row,
-      is_active: !!(row.is_active as number),
-      config: JSON.parse((row.config as string) || "{}"),
-    }));
+    const { data: integrations } = await db
+      .from("integrations")
+      .select("*")
+      .eq("workspace_id", profile.workspace_id as string);
 
     return NextResponse.json(integrations);
   } catch (err: unknown) {
@@ -44,23 +39,29 @@ export async function PATCH(request: NextRequest) {
     const db = getDb();
 
     if (!hasPrivilegedWorkspaceRole(profile.role)) {
-      const prefs = getWorkspacePreferences(profile.workspace_id as string);
+      const prefs = await getWorkspacePreferences(profile.workspace_id as string);
       if (!prefs.members_can_manage_integrations) {
         return NextResponse.json({ error: "Permission denied" }, { status: 403 });
       }
       // Check allowed platforms
-      const integration = db.prepare("SELECT platform_name FROM integrations WHERE id = ?").get(id) as { platform_name: string } | undefined;
+      const { data: integration } = await db
+        .from("integrations")
+        .select("platform_name")
+        .eq("id", id)
+        .maybeSingle();
       if (integration) {
         if (!prefs.allowed_integrations.includes(integration.platform_name)) {
           return NextResponse.json({ error: "This integration is not allowed" }, { status: 403 });
         }
       }
     }
-    const existing = db
-      .prepare(
-        "SELECT * FROM integrations WHERE id = ? AND workspace_id = ?"
-      )
-      .get(id, profile.workspace_id as string);
+
+    const { data: existing } = await db
+      .from("integrations")
+      .select("*")
+      .eq("id", id)
+      .eq("workspace_id", profile.workspace_id as string)
+      .maybeSingle();
 
     if (!existing) {
       return NextResponse.json(
@@ -69,39 +70,30 @@ export async function PATCH(request: NextRequest) {
       );
     }
 
-    const sets: string[] = [];
-    const values: unknown[] = [];
+    const updateFields: Record<string, unknown> = {};
 
     if (is_active !== undefined) {
-      sets.push("is_active = ?");
-      values.push(is_active ? 1 : 0);
+      updateFields.is_active = !!is_active;
     }
     if (config !== undefined) {
-      sets.push("config = ?");
-      values.push(JSON.stringify(config));
+      updateFields.config = config;
     }
 
-    if (sets.length === 0) {
+    if (Object.keys(updateFields).length === 0) {
       return NextResponse.json(
         { error: "No valid fields to update" },
         { status: 400 }
       );
     }
 
-    values.push(id);
-    db.prepare(`UPDATE integrations SET ${sets.join(", ")} WHERE id = ?`).run(
-      ...values
-    );
+    const { data: updated } = await db
+      .from("integrations")
+      .update(updateFields)
+      .eq("id", id)
+      .select()
+      .single();
 
-    const updated = db
-      .prepare("SELECT * FROM integrations WHERE id = ?")
-      .get(id) as Record<string, unknown>;
-
-    return NextResponse.json({
-      ...updated,
-      is_active: !!(updated.is_active as number),
-      config: JSON.parse((updated.config as string) || "{}"),
-    });
+    return NextResponse.json(updated);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Internal error";
     return NextResponse.json({ error: message }, { status: 500 });

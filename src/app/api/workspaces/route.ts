@@ -18,17 +18,15 @@ export async function PATCH(request: NextRequest) {
 
     const body = await request.json();
     const allowed = ["name", "subdomain", "logo_url"];
-    const sets: string[] = [];
-    const values: unknown[] = [];
+    const updateFields: Record<string, unknown> = {};
 
     for (const key of allowed) {
       if (key in body) {
-        sets.push(`${key} = ?`);
-        values.push(body[key]);
+        updateFields[key] = body[key];
       }
     }
 
-    if (sets.length === 0) {
+    if (Object.keys(updateFields).length === 0) {
       return NextResponse.json(
         { error: "No valid fields to update" },
         { status: 400 }
@@ -36,14 +34,12 @@ export async function PATCH(request: NextRequest) {
     }
 
     const db = getDb();
-    values.push(profile.workspace_id as string);
-    db.prepare(`UPDATE workspaces SET ${sets.join(", ")} WHERE id = ?`).run(
-      ...values
-    );
-
-    const updated = db
-      .prepare("SELECT * FROM workspaces WHERE id = ?")
-      .get(profile.workspace_id as string);
+    const { data: updated } = await db
+      .from("workspaces")
+      .update(updateFields)
+      .eq("id", profile.workspace_id as string)
+      .select()
+      .single();
 
     return NextResponse.json(updated);
   } catch (err: unknown) {
@@ -67,9 +63,7 @@ export async function DELETE() {
     }
 
     const db = getDb();
-    db.prepare("DELETE FROM workspaces WHERE id = ?").run(
-      profile.workspace_id as string
-    );
+    await db.from("workspaces").delete().eq("id", profile.workspace_id as string);
 
     return NextResponse.json({ ok: true });
   } catch (err: unknown) {

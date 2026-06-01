@@ -2,25 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import { getAuthProfile } from "@/lib/auth";
 
-const BOOL_FIELDS = [
-  "email_digest",
-  "email_mentions",
-  "slack_updates",
-  "slack_milestones",
-  "in_app_all",
-  "in_app_tasks",
-];
-
-function convertBooleans(row: Record<string, unknown>) {
-  const result = { ...row };
-  for (const field of BOOL_FIELDS) {
-    if (result[field] !== undefined) {
-      result[field] = !!(result[field] as number);
-    }
-  }
-  return result;
-}
-
 export async function GET() {
   try {
     const profile = await getAuthProfile();
@@ -29,11 +10,11 @@ export async function GET() {
     }
 
     const db = getDb();
-    const prefs = db
-      .prepare(
-        "SELECT * FROM notification_preferences WHERE profile_id = ?"
-      )
-      .get(profile.id as string) as Record<string, unknown> | undefined;
+    const { data: prefs } = await db
+      .from("notification_preferences")
+      .select("*")
+      .eq("profile_id", profile.id as string)
+      .maybeSingle();
 
     if (!prefs) {
       return NextResponse.json(
@@ -42,7 +23,7 @@ export async function GET() {
       );
     }
 
-    return NextResponse.json(convertBooleans(prefs));
+    return NextResponse.json(prefs);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Internal error";
     return NextResponse.json({ error: message }, { status: 500 });
@@ -59,35 +40,38 @@ export async function PATCH(request: NextRequest) {
     const body = await request.json();
     const db = getDb();
 
-    const sets: string[] = [];
-    const values: unknown[] = [];
+    const BOOL_FIELDS = [
+      "email_digest",
+      "email_mentions",
+      "slack_updates",
+      "slack_milestones",
+      "in_app_all",
+      "in_app_tasks",
+    ];
+
+    const updateFields: Record<string, unknown> = {};
 
     for (const field of BOOL_FIELDS) {
       if (field in body) {
-        sets.push(`${field} = ?`);
-        values.push(body[field] ? 1 : 0);
+        updateFields[field] = !!body[field];
       }
     }
 
-    if (sets.length === 0) {
+    if (Object.keys(updateFields).length === 0) {
       return NextResponse.json(
         { error: "No valid fields to update" },
         { status: 400 }
       );
     }
 
-    values.push(profile.id as string);
-    db.prepare(
-      `UPDATE notification_preferences SET ${sets.join(", ")} WHERE profile_id = ?`
-    ).run(...values);
+    const { data: updated } = await db
+      .from("notification_preferences")
+      .update(updateFields)
+      .eq("profile_id", profile.id as string)
+      .select()
+      .single();
 
-    const updated = db
-      .prepare(
-        "SELECT * FROM notification_preferences WHERE profile_id = ?"
-      )
-      .get(profile.id as string) as Record<string, unknown>;
-
-    return NextResponse.json(convertBooleans(updated));
+    return NextResponse.json(updated);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Internal error";
     return NextResponse.json({ error: message }, { status: 500 });

@@ -11,11 +11,11 @@ export async function GET() {
     }
 
     const db = getDb();
-    const sops = db
-      .prepare(
-        "SELECT * FROM sops WHERE workspace_id = ? ORDER BY updated_at DESC"
-      )
-      .all(profile.workspace_id as string);
+    const { data: sops } = await db
+      .from("sops")
+      .select("*")
+      .eq("workspace_id", profile.workspace_id as string)
+      .order("updated_at", { ascending: false });
 
     return NextResponse.json(sops);
   } catch (err: unknown) {
@@ -41,25 +41,25 @@ export async function POST(request: NextRequest) {
 
     const db = getDb();
     if (!hasPrivilegedWorkspaceRole(profile.role)) {
-      const prefs = getWorkspacePreferences(profile.workspace_id as string);
+      const prefs = await getWorkspacePreferences(profile.workspace_id as string);
       if (!prefs.members_can_create_sops) {
         return NextResponse.json({ error: "Permission denied" }, { status: 403 });
       }
     }
     const id = uid();
-    db.prepare(
-      `INSERT INTO sops (id, workspace_id, title, content, category, last_updated_by)
-       VALUES (?, ?, ?, ?, ?, ?)`
-    ).run(
-      id,
-      profile.workspace_id as string,
-      title,
-      content || "",
-      category || "General",
-      profile.id as string
-    );
+    const { data: sop } = await db
+      .from("sops")
+      .insert({
+        id,
+        workspace_id: profile.workspace_id as string,
+        title,
+        content: content || "",
+        category: category || "General",
+        last_updated_by: profile.id as string,
+      })
+      .select()
+      .single();
 
-    const sop = db.prepare("SELECT * FROM sops WHERE id = ?").get(id);
     return NextResponse.json(sop);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Internal error";
@@ -80,42 +80,33 @@ export async function PATCH(request: NextRequest) {
     }
 
     const db = getDb();
-    const existing = db
-      .prepare("SELECT * FROM sops WHERE id = ? AND workspace_id = ?")
-      .get(id, profile.workspace_id as string) as
-      | Record<string, unknown>
-      | undefined;
+    const { data: existing } = await db
+      .from("sops")
+      .select("*")
+      .eq("id", id)
+      .eq("workspace_id", profile.workspace_id as string)
+      .maybeSingle();
 
     if (!existing) {
       return NextResponse.json({ error: "SOP not found" }, { status: 404 });
     }
 
-    const sets: string[] = [
-      "updated_at = datetime('now')",
-      "version = version + 1",
-      "last_updated_by = ?",
-    ];
-    const values: unknown[] = [profile.id as string];
+    const updateFields: Record<string, unknown> = {
+      last_updated_by: profile.id as string,
+      version: (existing.version as number) + 1,
+    };
 
-    if (title !== undefined) {
-      sets.push("title = ?");
-      values.push(title);
-    }
-    if (content !== undefined) {
-      sets.push("content = ?");
-      values.push(content);
-    }
-    if (category !== undefined) {
-      sets.push("category = ?");
-      values.push(category);
-    }
+    if (title !== undefined) updateFields.title = title;
+    if (content !== undefined) updateFields.content = content;
+    if (category !== undefined) updateFields.category = category;
 
-    values.push(id);
-    db.prepare(`UPDATE sops SET ${sets.join(", ")} WHERE id = ?`).run(
-      ...values
-    );
+    const { data: updated } = await db
+      .from("sops")
+      .update(updateFields)
+      .eq("id", id)
+      .select()
+      .single();
 
-    const updated = db.prepare("SELECT * FROM sops WHERE id = ?").get(id);
     return NextResponse.json(updated);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Internal error";
@@ -136,14 +127,17 @@ export async function DELETE(request: NextRequest) {
     }
 
     const db = getDb();
-    const existing = db
-      .prepare("SELECT * FROM sops WHERE id = ? AND workspace_id = ?")
-      .get(id, profile.workspace_id as string);
+    const { data: existing } = await db
+      .from("sops")
+      .select("*")
+      .eq("id", id)
+      .eq("workspace_id", profile.workspace_id as string)
+      .maybeSingle();
     if (!existing) {
       return NextResponse.json({ error: "SOP not found" }, { status: 404 });
     }
 
-    db.prepare("DELETE FROM sops WHERE id = ?").run(id);
+    await db.from("sops").delete().eq("id", id);
     return NextResponse.json({ ok: true });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Internal error";

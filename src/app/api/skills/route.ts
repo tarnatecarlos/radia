@@ -12,31 +12,57 @@ export async function GET(request: NextRequest) {
     const url = new URL(request.url);
     const profileId = url.searchParams.get("profile_id");
 
-    const skills = db.prepare("SELECT * FROM skills WHERE workspace_id = ? ORDER BY category, name")
-      .all(profile.workspace_id as string) as Record<string, unknown>[];
+    const { data: skills, error: skillsErr } = await db
+      .from("skills")
+      .select("*")
+      .eq("workspace_id", profile.workspace_id as string)
+      .order("category")
+      .order("name");
+
+    if (skillsErr) throw skillsErr;
 
     // Bulk: return all workspace profile skills in one query
     const allProfileSkills = url.searchParams.get("all_profiles") === "true";
 
     if (allProfileSkills) {
-      const profileSkills = db.prepare(
-        `SELECT ps.*, s.name as skill_name, s.category as skill_category, ps.profile_id
-         FROM profile_skills ps
-         JOIN skills s ON s.id = ps.skill_id
-         JOIN profiles p ON p.id = ps.profile_id
-         WHERE p.workspace_id = ?`
-      ).all(profile.workspace_id as string) as Record<string, unknown>[];
-      return NextResponse.json({ skills, profileSkills });
+      const { data: profileSkills, error: psErr } = await db
+        .from("profile_skills")
+        .select("*, skills!inner(name, category), profiles!inner(workspace_id)")
+        .eq("profiles.workspace_id", profile.workspace_id as string);
+
+      if (psErr) throw psErr;
+
+      const mapped = (profileSkills || []).map((ps: Record<string, unknown>) => {
+        const skill = ps.skills as { name: string; category: string };
+        return {
+          ...ps,
+          skill_name: skill.name,
+          skill_category: skill.category,
+          skills: undefined,
+          profiles: undefined,
+        };
+      });
+      return NextResponse.json({ skills, profileSkills: mapped });
     }
 
     if (profileId) {
-      const profileSkills = db.prepare(
-        `SELECT ps.*, s.name as skill_name, s.category as skill_category
-         FROM profile_skills ps
-         JOIN skills s ON s.id = ps.skill_id
-         WHERE ps.profile_id = ?`
-      ).all(profileId) as Record<string, unknown>[];
-      return NextResponse.json({ skills, profileSkills });
+      const { data: profileSkills, error: psErr } = await db
+        .from("profile_skills")
+        .select("*, skills!inner(name, category)")
+        .eq("profile_id", profileId);
+
+      if (psErr) throw psErr;
+
+      const mapped = (profileSkills || []).map((ps: Record<string, unknown>) => {
+        const skill = ps.skills as { name: string; category: string };
+        return {
+          ...ps,
+          skill_name: skill.name,
+          skill_category: skill.category,
+          skills: undefined,
+        };
+      });
+      return NextResponse.json({ skills, profileSkills: mapped });
     }
 
     return NextResponse.json({ skills });
@@ -62,11 +88,23 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: "profile_id and skill_id required" }, { status: 400 });
       }
       const id = uid();
-      db.prepare(
-        `INSERT OR REPLACE INTO profile_skills (id, profile_id, skill_id, proficiency, source, verified_at)
-         VALUES (?, ?, ?, ?, ?, datetime('now'))`
-      ).run(id, profile_id, skill_id, proficiency || "beginner", source || "manual");
-      const row = db.prepare("SELECT * FROM profile_skills WHERE id = ?").get(id);
+      const { data: row, error } = await db
+        .from("profile_skills")
+        .upsert(
+          {
+            id,
+            profile_id,
+            skill_id,
+            proficiency: proficiency || "beginner",
+            source: source || "manual",
+            verified_at: new Date().toISOString(),
+          },
+          { onConflict: "profile_id,skill_id" }
+        )
+        .select()
+        .single();
+
+      if (error) throw error;
       return NextResponse.json(row);
     }
 
@@ -75,10 +113,18 @@ export async function POST(request: NextRequest) {
     if (!name) return NextResponse.json({ error: "name is required" }, { status: 400 });
 
     const id = uid();
-    db.prepare("INSERT INTO skills (id, workspace_id, name, category) VALUES (?, ?, ?, ?)")
-      .run(id, profile.workspace_id as string, name, category || "General");
+    const { data: created, error } = await db
+      .from("skills")
+      .insert({
+        id,
+        workspace_id: profile.workspace_id as string,
+        name,
+        category: category || "General",
+      })
+      .select()
+      .single();
 
-    const created = db.prepare("SELECT * FROM skills WHERE id = ?").get(id);
+    if (error) throw error;
     return NextResponse.json(created);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Internal error";
@@ -99,7 +145,13 @@ export async function DELETE(request: NextRequest) {
     if (!id) return NextResponse.json({ error: "id is required" }, { status: 400 });
 
     const db = getDb();
-    db.prepare("DELETE FROM skills WHERE id = ? AND workspace_id = ?").run(id, profile.workspace_id as string);
+    const { error } = await db
+      .from("skills")
+      .delete()
+      .eq("id", id)
+      .eq("workspace_id", profile.workspace_id as string);
+
+    if (error) throw error;
     return NextResponse.json({ ok: true });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Internal error";

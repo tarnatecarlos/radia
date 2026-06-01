@@ -10,46 +10,47 @@ export const DEFAULT_ALLOWED_INTEGRATIONS = [
   "messenger",
 ];
 
-function parseAllowedIntegrations(value: unknown): string[] {
-  if (typeof value !== "string") return [...DEFAULT_ALLOWED_INTEGRATIONS];
-
-  try {
-    const parsed = JSON.parse(value);
-    if (Array.isArray(parsed) && parsed.every((item) => typeof item === "string")) {
-      return parsed;
-    }
-  } catch {
-    // Fall back to defaults if a legacy row contains malformed JSON.
-  }
-
-  return [...DEFAULT_ALLOWED_INTEGRATIONS];
-}
-
 function mapPreferences(row: Record<string, unknown>): WorkspacePreferences {
   return {
     id: row.id as string,
     workspace_id: row.workspace_id as string,
-    members_can_create_tasks: !!(row.members_can_create_tasks as number),
-    members_can_create_sops: !!(row.members_can_create_sops as number),
-    members_can_create_courses: !!(row.members_can_create_courses as number),
-    members_can_manage_integrations: !!(row.members_can_manage_integrations as number),
-    allowed_integrations: parseAllowedIntegrations(row.allowed_integrations),
+    members_can_create_tasks: row.members_can_create_tasks as boolean,
+    members_can_create_sops: row.members_can_create_sops as boolean,
+    members_can_create_courses: row.members_can_create_courses as boolean,
+    members_can_manage_integrations: row.members_can_manage_integrations as boolean,
+    allowed_integrations: Array.isArray(row.allowed_integrations)
+      ? row.allowed_integrations
+      : [...DEFAULT_ALLOWED_INTEGRATIONS],
   };
 }
 
-export function getWorkspacePreferences(workspaceId: string): WorkspacePreferences {
+export async function getWorkspacePreferences(workspaceId: string): Promise<WorkspacePreferences> {
   const db = getDb();
-  let row = db
-    .prepare("SELECT * FROM workspace_preferences WHERE workspace_id = ?")
-    .get(workspaceId) as Record<string, unknown> | undefined;
+  const { data: row, error } = await db
+    .from("workspace_preferences")
+    .select("*")
+    .eq("workspace_id", workspaceId)
+    .maybeSingle();
 
-  if (!row) {
-    const id = uid();
-    db.prepare("INSERT INTO workspace_preferences (id, workspace_id) VALUES (?, ?)").run(id, workspaceId);
-    row = db.prepare("SELECT * FROM workspace_preferences WHERE id = ?").get(id) as Record<string, unknown>;
+  if (!error && row) {
+    return mapPreferences(row);
   }
 
-  return mapPreferences(row);
+  // Insert default row if missing
+  const id = uid();
+  const { error: insertErr } = await db
+    .from("workspace_preferences")
+    .insert({ id, workspace_id: workspaceId });
+  if (insertErr) throw new Error(`Failed to create workspace preferences: ${insertErr.message}`);
+
+  const { data: newRow, error: fetchErr } = await db
+    .from("workspace_preferences")
+    .select("*")
+    .eq("id", id)
+    .single();
+  if (fetchErr || !newRow) throw new Error("Failed to fetch newly created workspace preferences");
+
+  return mapPreferences(newRow);
 }
 
 export function hasPrivilegedWorkspaceRole(role: unknown): boolean {

@@ -15,46 +15,77 @@ export async function GET() {
 
     const db = getDb();
 
-    const requests = db
-      .prepare(
-        `SELECT ar.*, p.first_name, p.last_name, p.email, p.title as profile_title, p.role, p.avatar_url
-         FROM admin_requests ar
-         JOIN profiles p ON p.id = ar.profile_id
-         WHERE p.workspace_id = ?
-         ORDER BY ar.created_at DESC`
+    const { data: requestRows, error: reqErr } = await db
+      .from("admin_requests")
+      .select(
+        "*, profiles!inner(first_name, last_name, email, title, role, avatar_url, workspace_id)"
       )
-      .all(profile.workspace_id as string);
+      .eq("profiles.workspace_id", profile.workspace_id as string)
+      .order("created_at", { ascending: false });
 
-    const admins = db
-      .prepare(
-        `SELECT sa.*, p.first_name, p.last_name, p.email, p.title as profile_title, p.role, p.avatar_url
-         FROM server_admins sa
-         JOIN profiles p ON p.id = sa.profile_id
-         WHERE p.workspace_id = ?
-         ORDER BY sa.granted_at DESC`
+    if (reqErr) throw reqErr;
+
+    const requests = (requestRows || []).map((r: Record<string, unknown>) => {
+      const p = r.profiles as Record<string, unknown>;
+      return {
+        ...r,
+        first_name: p.first_name,
+        last_name: p.last_name,
+        email: p.email,
+        profile_title: p.title,
+        role: p.role,
+        avatar_url: p.avatar_url,
+        profiles: undefined,
+      };
+    });
+
+    const { data: adminRows, error: admErr } = await db
+      .from("server_admins")
+      .select(
+        "*, profiles!inner(first_name, last_name, email, title, role, avatar_url, workspace_id)"
       )
-      .all(profile.workspace_id as string);
+      .eq("profiles.workspace_id", profile.workspace_id as string)
+      .order("granted_at", { ascending: false });
 
-    const auditLog = db
-      .prepare(
-        `SELECT al.*, p.first_name as actor_first_name, p.last_name as actor_last_name
-         FROM audit_log al
-         LEFT JOIN profiles p ON p.id = al.actor_id
-         WHERE al.workspace_id = ?
-         ORDER BY al.created_at DESC
-         LIMIT 100`
-      )
-      .all(profile.workspace_id as string) as Record<string, unknown>[];
+    if (admErr) throw admErr;
 
-    const parsedAuditLog = auditLog.map((row) => ({
-      ...row,
-      metadata: JSON.parse((row.metadata as string) || "{}"),
-    }));
+    const admins = (adminRows || []).map((r: Record<string, unknown>) => {
+      const p = r.profiles as Record<string, unknown>;
+      return {
+        ...r,
+        first_name: p.first_name,
+        last_name: p.last_name,
+        email: p.email,
+        profile_title: p.title,
+        role: p.role,
+        avatar_url: p.avatar_url,
+        profiles: undefined,
+      };
+    });
+
+    const { data: auditRows, error: auditErr } = await db
+      .from("audit_log")
+      .select("*, profiles:actor_id(first_name, last_name)")
+      .eq("workspace_id", profile.workspace_id as string)
+      .order("created_at", { ascending: false })
+      .limit(100);
+
+    if (auditErr) throw auditErr;
+
+    const auditLog = (auditRows || []).map((row: Record<string, unknown>) => {
+      const actor = row.profiles as { first_name: string; last_name: string } | null;
+      return {
+        ...row,
+        actor_first_name: actor?.first_name ?? null,
+        actor_last_name: actor?.last_name ?? null,
+        profiles: undefined,
+      };
+    });
 
     return NextResponse.json({
       requests,
       admins,
-      auditLog: parsedAuditLog,
+      auditLog,
     });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Internal error";
@@ -87,10 +118,13 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      const req = db
-        .prepare("SELECT * FROM admin_requests WHERE id = ?")
-        .get(requestId) as Record<string, unknown> | undefined;
+      const { data: req, error: fetchErr } = await db
+        .from("admin_requests")
+        .select("*")
+        .eq("id", requestId)
+        .maybeSingle();
 
+      if (fetchErr) throw fetchErr;
       if (!req) {
         return NextResponse.json(
           { error: "Request not found" },
@@ -98,30 +132,31 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      db.prepare(
-        `UPDATE admin_requests SET status = 'approved', reviewed_at = datetime('now'), reviewed_by = ? WHERE id = ?`
-      ).run(profile.id as string, requestId);
+      await db
+        .from("admin_requests")
+        .update({
+          status: "approved",
+          reviewed_at: new Date().toISOString(),
+          reviewed_by: profile.id as string,
+        })
+        .eq("id", requestId);
 
       // Create server_admin entry
-      db.prepare(
-        `INSERT INTO server_admins (id, profile_id, server_role, granted_by) VALUES (?, ?, ?, ?)`
-      ).run(
-        uid(),
-        req.profile_id as string,
-        req.requested_role as string,
-        profile.id as string
-      );
+      await db.from("server_admins").insert({
+        id: uid(),
+        profile_id: req.profile_id as string,
+        server_role: req.requested_role as string,
+        granted_by: profile.id as string,
+      });
 
       // Create audit log
-      db.prepare(
-        `INSERT INTO audit_log (id, workspace_id, actor_id, action, metadata) VALUES (?, ?, ?, ?, ?)`
-      ).run(
-        uid(),
-        profile.workspace_id as string,
-        profile.id as string,
-        "approve_admin_request",
-        JSON.stringify({ requestId, role: req.requested_role })
-      );
+      await db.from("audit_log").insert({
+        id: uid(),
+        workspace_id: profile.workspace_id as string,
+        actor_id: profile.id as string,
+        action: "approve_admin_request",
+        metadata: { requestId, role: req.requested_role },
+      });
 
       return NextResponse.json({ ok: true });
     }
@@ -135,10 +170,13 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      const req = db
-        .prepare("SELECT * FROM admin_requests WHERE id = ?")
-        .get(requestId) as Record<string, unknown> | undefined;
+      const { data: req, error: fetchErr } = await db
+        .from("admin_requests")
+        .select("*")
+        .eq("id", requestId)
+        .maybeSingle();
 
+      if (fetchErr) throw fetchErr;
       if (!req) {
         return NextResponse.json(
           { error: "Request not found" },
@@ -146,19 +184,22 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      db.prepare(
-        `UPDATE admin_requests SET status = 'rejected', reviewed_at = datetime('now'), reviewed_by = ? WHERE id = ?`
-      ).run(profile.id as string, requestId);
+      await db
+        .from("admin_requests")
+        .update({
+          status: "rejected",
+          reviewed_at: new Date().toISOString(),
+          reviewed_by: profile.id as string,
+        })
+        .eq("id", requestId);
 
-      db.prepare(
-        `INSERT INTO audit_log (id, workspace_id, actor_id, action, metadata) VALUES (?, ?, ?, ?, ?)`
-      ).run(
-        uid(),
-        profile.workspace_id as string,
-        profile.id as string,
-        "reject_admin_request",
-        JSON.stringify({ requestId, role: req.requested_role })
-      );
+      await db.from("audit_log").insert({
+        id: uid(),
+        workspace_id: profile.workspace_id as string,
+        actor_id: profile.id as string,
+        action: "reject_admin_request",
+        metadata: { requestId, role: req.requested_role },
+      });
 
       return NextResponse.json({ ok: true });
     }
@@ -172,15 +213,13 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      db.prepare(
-        `INSERT INTO audit_log (id, workspace_id, actor_id, action, metadata) VALUES (?, ?, ?, ?, ?)`
-      ).run(
-        uid(),
-        profile.workspace_id as string,
-        profile.id as string,
-        logAction,
-        JSON.stringify(metadata || {})
-      );
+      await db.from("audit_log").insert({
+        id: uid(),
+        workspace_id: profile.workspace_id as string,
+        actor_id: profile.id as string,
+        action: logAction,
+        metadata: metadata || {},
+      });
 
       return NextResponse.json({ ok: true });
     }

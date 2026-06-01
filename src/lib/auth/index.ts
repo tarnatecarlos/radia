@@ -14,56 +14,64 @@ export async function verifyPassword(password: string, hash: string): Promise<bo
   return bcrypt.compare(password, hash);
 }
 
-export function createSession(userId: string): string {
+export async function createSession(userId: string): Promise<string> {
   const db = getDb();
   const sessionId = uid();
   const expiresAt = new Date(Date.now() + SESSION_TTL_DAYS * 24 * 60 * 60 * 1000).toISOString();
-  db.prepare("INSERT INTO sessions (id, user_id, expires_at) VALUES (?, ?, ?)").run(sessionId, userId, expiresAt);
+  const { error } = await db.from("sessions").insert({ id: sessionId, user_id: userId, expires_at: expiresAt });
+  if (error) throw new Error(`Failed to create session: ${error.message}`);
   return sessionId;
 }
 
-export function getSessionUser(sessionId: string | undefined): { userId: string; email: string } | null {
+export async function getSessionUser(sessionId: string | undefined): Promise<{ userId: string; email: string } | null> {
   if (!sessionId) return null;
   const db = getDb();
-  maybeCleanExpiredSessions();
-  const row = db.prepare(`
-    SELECT s.user_id, u.email FROM sessions s
-    JOIN users u ON u.id = s.user_id
-    WHERE s.id = ? AND s.expires_at > datetime('now')
-  `).get(sessionId) as { user_id: string; email: string } | undefined;
-  if (!row) return null;
-  return { userId: row.user_id, email: row.email };
+  await maybeCleanExpiredSessions();
+
+  const { data, error } = await db
+    .from("sessions")
+    .select("user_id, users!inner(email)")
+    .eq("id", sessionId)
+    .gt("expires_at", new Date().toISOString())
+    .maybeSingle();
+
+  if (error || !data) return null;
+
+  const userObj = data.users as unknown as { email: string };
+  return { userId: data.user_id, email: userObj.email };
 }
 
-export function deleteSession(sessionId: string): void {
+export async function deleteSession(sessionId: string): Promise<void> {
   const db = getDb();
-  db.prepare("DELETE FROM sessions WHERE id = ?").run(sessionId);
+  await db.from("sessions").delete().eq("id", sessionId);
 }
 
-export function deleteAllSessions(userId: string): void {
+export async function deleteAllSessions(userId: string): Promise<void> {
   const db = getDb();
-  db.prepare("DELETE FROM sessions WHERE user_id = ?").run(userId);
+  await db.from("sessions").delete().eq("user_id", userId);
 }
 
 /** Probabilistic cleanup of expired sessions (~1% of calls) */
-export function maybeCleanExpiredSessions(): void {
+export async function maybeCleanExpiredSessions(): Promise<void> {
   if (Math.random() > 0.01) return;
   const db = getDb();
-  db.prepare("DELETE FROM sessions WHERE expires_at <= datetime('now')").run();
+  await db.from("sessions").delete().lte("expires_at", new Date().toISOString());
 }
 
-export function getProfileByUserId(userId: string) {
+export async function getProfileByUserId(userId: string) {
   const db = getDb();
-  return db.prepare("SELECT * FROM profiles WHERE user_id = ?").get(userId) as Record<string, unknown> | undefined;
+  const { data, error } = await db.from("profiles").select("*").eq("user_id", userId).maybeSingle();
+  if (error) return undefined;
+  return data ?? undefined;
 }
 
 export async function getAuthProfile() {
   const { cookies } = await import("next/headers");
   const cookieStore = await cookies();
   const sessionId = cookieStore.get(SESSION_COOKIE)?.value;
-  const session = getSessionUser(sessionId);
+  const session = await getSessionUser(sessionId);
   if (!session) return null;
-  return getProfileByUserId(session.userId) ?? null;
+  return (await getProfileByUserId(session.userId)) ?? null;
 }
 
 export function sessionCookieOptions() {

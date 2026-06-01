@@ -8,7 +8,7 @@ export async function POST() {
     const sessionId = cookieStore.get(SESSION_COOKIE)?.value;
 
     if (sessionId) {
-      deleteSession(sessionId);
+      await deleteSession(sessionId);
     }
 
     cookieStore.delete(SESSION_COOKIE);

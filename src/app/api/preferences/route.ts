@@ -7,7 +7,7 @@ export async function GET() {
   try {
     const profile = await getAuthProfile();
     if (!profile) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    return NextResponse.json(getWorkspacePreferences(profile.workspace_id as string));
+    return NextResponse.json(await getWorkspacePreferences(profile.workspace_id as string));
   } catch (err: unknown) {
     return NextResponse.json({ error: err instanceof Error ? err.message : "Internal error" }, { status: 500 });
   }
@@ -25,19 +25,17 @@ export async function PATCH(request: NextRequest) {
     const db = getDb();
 
     // Ensure row exists
-    getWorkspacePreferences(profile.workspace_id as string);
+    await getWorkspacePreferences(profile.workspace_id as string);
 
     const boolFields = ["members_can_create_tasks", "members_can_create_sops", "members_can_create_courses", "members_can_manage_integrations"];
-    const sets: string[] = [];
-    const values: unknown[] = [];
+    const updateObj: Record<string, unknown> = {};
 
     for (const key of boolFields) {
       if (key in body) {
         if (typeof body[key] !== "boolean") {
           return NextResponse.json({ error: `${key} must be a boolean` }, { status: 400 });
         }
-        sets.push(`${key} = ?`);
-        values.push(body[key] ? 1 : 0);
+        updateObj[key] = body[key];
       }
     }
 
@@ -51,16 +49,14 @@ export async function PATCH(request: NextRequest) {
       ) {
         return NextResponse.json({ error: "allowed_integrations contains an unsupported platform" }, { status: 400 });
       }
-      sets.push("allowed_integrations = ?");
-      values.push(JSON.stringify(allowedIntegrations));
+      updateObj.allowed_integrations = allowedIntegrations;
     }
 
-    if (sets.length > 0) {
-      values.push(profile.workspace_id as string);
-      db.prepare(`UPDATE workspace_preferences SET ${sets.join(", ")} WHERE workspace_id = ?`).run(...values);
+    if (Object.keys(updateObj).length > 0) {
+      await db.from("workspace_preferences").update(updateObj).eq("workspace_id", profile.workspace_id as string);
     }
 
-    return NextResponse.json(getWorkspacePreferences(profile.workspace_id as string));
+    return NextResponse.json(await getWorkspacePreferences(profile.workspace_id as string));
   } catch (err: unknown) {
     return NextResponse.json({ error: err instanceof Error ? err.message : "Internal error" }, { status: 500 });
   }
