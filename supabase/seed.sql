@@ -12,7 +12,7 @@
 
 DO $$
 DECLARE
-  pw TEXT := '$2b$12$Ed3NKb8pPeAlvfa/ZfoLmefSC1ZqROUXhfJoA56kF2gqa7U1BC4g6';
+  pw TEXT := '$2b$12$Qe1LoXBeR42FFF/ZNm8FoOOqTb72Mh53QHFUXetmrJ87R4I25Pfqu';
   admin_uid UUID := gen_random_uuid();
   sarah_uid UUID := gen_random_uuid();
   marcus_uid UUID := gen_random_uuid();
